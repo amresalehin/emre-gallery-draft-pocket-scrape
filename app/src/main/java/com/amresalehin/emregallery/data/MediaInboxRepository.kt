@@ -34,6 +34,9 @@ data class MediaInboxStack(
 )
 
 class MediaInboxRepository(private val context: Context) {
+    @Volatile
+    private var loadFailed: Boolean = false
+
     private val prefs: SharedPreferences =
         context.getSharedPreferences("media_inbox_prefs", Context.MODE_PRIVATE)
 
@@ -101,6 +104,9 @@ class MediaInboxRepository(private val context: Context) {
                 persist()
             }
         } catch (e: Exception) {
+            // Keep the library unavailable rather than silently treating unreadable persisted
+            // data as an empty library that a later save could overwrite.
+            loadFailed = true
             _stacks.value = emptyList()
         }
     }
@@ -130,42 +136,46 @@ class MediaInboxRepository(private val context: Context) {
         return merged
     }
 
-    private fun persist() {
-        try {
-            val jsonArray = JSONArray()
-            _stacks.value.forEach { stack ->
-                val stackObj = JSONObject().apply {
-                    put("id", stack.id)
-                    put("title", stack.title)
-                    put("sourceDomain", stack.sourceDomain)
-                    put("sourceUrl", stack.sourceUrl)
-                    put("timestampMillis", stack.timestampMillis)
-                    put("description", stack.description)
-
-                    val itemsArr = JSONArray()
-                    stack.items.forEach { itm ->
-                        val itmObj = JSONObject().apply {
-                            put("id", itm.id)
-                            put("title", itm.title)
-                            put("localUri", itm.localUri)
-                            put("sourceUrl", itm.sourceUrl)
-                            put("isVideo", itm.isVideo)
-                            put("isAudio", itm.isAudio)
-                            put("isStream", itm.isStream)
-                            put("format", itm.format)
-                            put("sizeBytes", itm.sizeBytes)
-                            put("dateAddedMillis", itm.dateAddedMillis)
-                        }
-                        itemsArr.put(itmObj)
-                    }
-                    put("items", itemsArr)
-                }
-                jsonArray.put(stackObj)
-            }
-            prefs.edit().putString(KEY_STACKS_JSON, jsonArray.toString()).apply()
-        } catch (e: Exception) {
-            // Log or ignore
+    /**
+     * Synchronously commits the supplied snapshot before callers publish it to observers.
+     * A failed commit is surfaced to the caller; bookmark creation must never report success
+     * while its durable record is still only queued in memory.
+     */
+    private fun persist(stacks: List<MediaInboxStack> = _stacks.value): Boolean {
+        check(!loadFailed) {
+            "Saved library could not be read; refusing to overwrite its persisted contents."
         }
+        val jsonArray = JSONArray()
+        stacks.forEach { stack ->
+            val stackObj = JSONObject().apply {
+                put("id", stack.id)
+                put("title", stack.title)
+                put("sourceDomain", stack.sourceDomain)
+                put("sourceUrl", stack.sourceUrl)
+                put("timestampMillis", stack.timestampMillis)
+                put("description", stack.description)
+
+                val itemsArr = JSONArray()
+                stack.items.forEach { itm ->
+                    val itmObj = JSONObject().apply {
+                        put("id", itm.id)
+                        put("title", itm.title)
+                        put("localUri", itm.localUri)
+                        put("sourceUrl", itm.sourceUrl)
+                        put("isVideo", itm.isVideo)
+                        put("isAudio", itm.isAudio)
+                        put("isStream", itm.isStream)
+                        put("format", itm.format)
+                        put("sizeBytes", itm.sizeBytes)
+                        put("dateAddedMillis", itm.dateAddedMillis)
+                    }
+                    itemsArr.put(itmObj)
+                }
+                put("items", itemsArr)
+            }
+            jsonArray.put(stackObj)
+        }
+        return prefs.edit().putString(KEY_STACKS_JSON, jsonArray.toString()).commit()
     }
 
     fun addStack(stack: MediaInboxStack) {
@@ -200,7 +210,11 @@ class MediaInboxRepository(private val context: Context) {
             timestampMillis = System.currentTimeMillis(),
             description = description
         )
-        addStack(bookmarkStack)
+        val updated = consolidateStacks(listOf(bookmarkStack) + _stacks.value)
+        check(persist(updated)) {
+            "Bookmark could not be durably saved. Please retry."
+        }
+        _stacks.value = updated
         return bookmarkStack
     }
 

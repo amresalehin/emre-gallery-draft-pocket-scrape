@@ -25,7 +25,8 @@ data class PageIntelligenceSnapshot(
     val contentType: String,
     val bodyBytes: Long,
     val metadata: PageIntelligenceExtraction<PageMetadata>,
-    val structuredData: PageIntelligenceExtraction<JsonLdParseResult>
+    val structuredData: PageIntelligenceExtraction<JsonLdParseResult>,
+    val classification: PageClassification
 )
 
 sealed interface PageIntelligenceResult {
@@ -39,7 +40,7 @@ sealed interface PageIntelligenceResult {
 /**
  * Coordinates static page fetching and independent metadata/JSON-LD parsing.
  *
- * This service does not persist bookmarks, classify page types, discover media, or download files.
+ * This service does not persist bookmarks, discover media, or download files.
  * It discards the HTML body after parsing and returns only bounded fetch facts and parser outputs.
  * Parser failures are isolated so one broken enrichment does not discard the other result.
  */
@@ -63,6 +64,15 @@ class PageIntelligenceService(
                 val structuredData = extractSafely {
                     structuredDataParser(fetched.html, fetched.finalUrl)
                 }
+                val metadataValue = when (metadata) {
+                    is PageIntelligenceExtraction.Success -> metadata.value
+                    is PageIntelligenceExtraction.Failure -> null
+                }
+                val structuredDataValue = when (structuredData) {
+                    is PageIntelligenceExtraction.Success -> structuredData.value
+                    is PageIntelligenceExtraction.Failure -> null
+                }
+                val classification = PageClassifier.classify(metadataValue, structuredDataValue)
 
                 PageIntelligenceResult.Success(
                     PageIntelligenceSnapshot(
@@ -72,7 +82,8 @@ class PageIntelligenceService(
                         contentType = fetched.contentType,
                         bodyBytes = fetched.bodyBytes,
                         metadata = metadata,
-                        structuredData = structuredData
+                        structuredData = structuredData,
+                        classification = classification
                     )
                 )
             }

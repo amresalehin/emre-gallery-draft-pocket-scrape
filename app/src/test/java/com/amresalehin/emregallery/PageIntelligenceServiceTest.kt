@@ -7,6 +7,7 @@ import com.amresalehin.emregallery.data.PageIntelligenceExtraction
 import com.amresalehin.emregallery.data.PageIntelligenceExtractionFailureReason
 import com.amresalehin.emregallery.data.PageIntelligenceResult
 import com.amresalehin.emregallery.data.PageIntelligenceService
+import com.amresalehin.emregallery.data.PageKind
 import com.amresalehin.emregallery.data.PageMetadataParser
 import okhttp3.CookieJar
 import okhttp3.Dns
@@ -15,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -81,6 +83,8 @@ class PageIntelligenceServiceTest {
             assertEquals(expectedFinal, structured.sourcePageUrl)
             assertEquals("Structured headline", structured.entities.single().headline)
             assertEquals(server.url("/articles/related").toString(), structured.entities.single().url)
+            assertEquals(PageKind.ARTICLE, snapshot.classification.kind)
+            assertFalse(snapshot.classification.isAmbiguous)
         }
     }
 
@@ -137,6 +141,7 @@ class PageIntelligenceServiceTest {
             )
             val structured = (snapshot.structuredData as PageIntelligenceExtraction.Success).value
             assertEquals("Structured page", structured.entities.single().name)
+            assertEquals(PageKind.UNKNOWN, snapshot.classification.kind)
         }
     }
 

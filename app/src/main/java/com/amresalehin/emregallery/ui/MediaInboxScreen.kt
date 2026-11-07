@@ -152,7 +152,11 @@ fun MediaInboxScreen(
         } else if (currentViewMode == DownloaderViewMode.DOWNLOADER_PAGE) {
             currentViewMode = if (initialViewMode == DownloaderViewMode.SAVED_LIBRARY) DownloaderViewMode.SAVED_LIBRARY else DownloaderViewMode.SEARCH_PAGE
         } else if (currentViewMode == DownloaderViewMode.ACTIVITY_PAGE) {
-            currentViewMode = if (initialViewMode == DownloaderViewMode.SAVED_LIBRARY) DownloaderViewMode.SAVED_LIBRARY else DownloaderViewMode.SEARCH_PAGE
+            if (initialViewMode == DownloaderViewMode.ACTIVITY_PAGE) {
+                onBack()
+            } else {
+                currentViewMode = if (initialViewMode == DownloaderViewMode.SAVED_LIBRARY) DownloaderViewMode.SAVED_LIBRARY else DownloaderViewMode.SEARCH_PAGE
+            }
         } else if (showFilterSheet) {
             showFilterSheet = false
         } else if (currentViewMode == DownloaderViewMode.SAVED_LIBRARY) {
@@ -527,7 +531,13 @@ fun MediaInboxScreen(
                         )
                     } else if (currentViewMode == DownloaderViewMode.ACTIVITY_PAGE) {
                         DownloaderActivityPage(
-                            onBack = { currentViewMode = DownloaderViewMode.SEARCH_PAGE },
+                            onBack = {
+                                if (initialViewMode == DownloaderViewMode.ACTIVITY_PAGE) {
+                                    onBack()
+                                } else {
+                                    currentViewMode = DownloaderViewMode.SEARCH_PAGE
+                                }
+                            },
                             onAddNewDownload = { currentViewMode = DownloaderViewMode.SEARCH_PAGE },
                             onOpenMedia = { item ->
                                 item.localUri?.let { uriStr ->

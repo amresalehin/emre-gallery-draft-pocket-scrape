@@ -219,27 +219,6 @@ class MediaDownloadWorker(
             if (downloadedFile != null && downloadedFile.exists() && downloadedFile.length() > 0L) {
                 setProgress(workDataOf(KEY_PROGRESS to 1.0f, KEY_STATUS to "Saved successfully"))
 
-                val inboxItem = MediaInboxItem(
-                    id = itemId,
-                    title = title,
-                    localUri = downloadedFile.absolutePath,
-                    sourceUrl = mediaUrl,
-                    isVideo = isVideo,
-                    isAudio = isAudio,
-                    isStream = isStream,
-                    format = format,
-                    sizeBytes = downloadedFile.length(),
-                    dateAddedMillis = System.currentTimeMillis()
-                )
-
-                MediaInboxRepository.getInstance(applicationContext).addItemToStack(
-                    stackId = stackId,
-                    item = inboxItem,
-                    stackTitle = stackTitle,
-                    sourceDomain = sourceDomain,
-                    sourceUrl = sourceUrl
-                )
-
                 DownloadActivityManager.markFinished(
                     itemId = itemId,
                     localUri = downloadedFile.absolutePath,

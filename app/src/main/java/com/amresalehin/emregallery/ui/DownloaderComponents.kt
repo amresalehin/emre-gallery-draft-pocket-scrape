@@ -629,13 +629,6 @@ fun DownloaderSearchMainPage(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // 4. Saved Preview Section matching image_1d9653bc.png layout with real data
-        SavedPreviewSection(
-            stacks = effectiveStacks,
-            onViewSavedLibrary = onViewSavedLibrary,
-            onSelectStack = onSelectStack,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 

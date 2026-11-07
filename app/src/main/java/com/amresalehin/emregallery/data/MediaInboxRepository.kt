@@ -176,6 +176,32 @@ class MediaInboxRepository(private val context: Context) {
         persist()
     }
 
+    fun addBookmark(
+        title: String,
+        url: String,
+        domain: String = "",
+        description: String = ""
+    ): MediaInboxStack {
+        val cleanUrl = url.trim()
+        val cleanDomain = domain.ifBlank { MediaClassifier.cleanDomainFromUrl(cleanUrl) }
+        val bookmarkStack = MediaInboxStack(
+            id = "bookmark_${System.currentTimeMillis()}",
+            title = title.ifBlank { cleanDomain.ifBlank { cleanUrl } },
+            sourceDomain = cleanDomain,
+            sourceUrl = cleanUrl,
+            items = emptyList(),
+            timestampMillis = System.currentTimeMillis(),
+            description = description
+        )
+        addStack(bookmarkStack)
+        return bookmarkStack
+    }
+
+    fun updateStack(updated: MediaInboxStack) {
+        _stacks.value = _stacks.value.map { if (it.id == updated.id) updated else it }
+        persist()
+    }
+
     @Synchronized
     fun addItemToStack(
         stackId: String,

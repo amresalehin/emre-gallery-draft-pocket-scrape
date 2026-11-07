@@ -90,8 +90,6 @@ fun AlbumsScreen(
     val isBusy = isProcessingActive || FaceProcessingCoordinator.isBusy(context)
     var selectedEngineId by remember { mutableStateOf(FaceRecognitionSettings.getActiveEngine(context)) }
     val faceStore = remember(context) { FaceClusterStore(context.applicationContext) }
-    val inboxRepo = remember(context) { com.amresalehin.emregallery.data.MediaInboxRepository.getInstance(context) }
-    val savedStacks by inboxRepo.stacks.collectAsState()
     var detectedPeople by remember { mutableStateOf(emptyList<PersonSummary>()) }
     var engineMenuExpanded by remember { mutableStateOf(false) }
 
@@ -135,6 +133,18 @@ fun AlbumsScreen(
     val binCount = inBin.size
     val hiddenCount = hidden.size
     val archiveCount = archive.size
+
+    val downloadActivities by com.amresalehin.emregallery.data.DownloadActivityManager.activities.collectAsState()
+    val activityCountText = remember(downloadActivities) {
+        val active = downloadActivities.count { it.status == com.amresalehin.emregallery.data.DownloadActivityStatus.DOWNLOADING || it.status == com.amresalehin.emregallery.data.DownloadActivityStatus.RETRYING }
+        val failed = downloadActivities.count { it.status == com.amresalehin.emregallery.data.DownloadActivityStatus.FAILED }
+        when {
+            active > 0 -> "$active active"
+            failed > 0 -> "$failed failed"
+            downloadActivities.isNotEmpty() -> "${downloadActivities.size} items"
+            else -> ""
+        }
+    }
 
     var albumToRename by remember { mutableStateOf<CustomAlbum?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -232,7 +242,7 @@ fun AlbumsScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // 2-column tiles: Locked folder & Inbox
+            // 2-column tiles: Locked folder & Activity
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -247,12 +257,12 @@ fun AlbumsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 CollectionTile(
-                    title = "Inbox",
-                    count = "",
-                    icon = Icons.Default.Inbox,
+                    title = "Activity",
+                    count = activityCountText,
+                    icon = Icons.Default.MonitorHeart,
                     iconTint = MaterialTheme.colorScheme.onSurface,
                     iconBg = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    onClick = { onFilter("Inbox") },
+                    onClick = { onFilter("Activity") },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -724,29 +734,6 @@ fun AlbumsScreen(
             }
         }
 
-        // Saved Container (Matching Downloader Main Page)
-        item {
-            SavedPreviewSection(
-                stacks = savedStacks,
-                onViewSavedLibrary = {
-                    if (onOpenSavedLibrary != null) {
-                        onOpenSavedLibrary()
-                    } else {
-                        onFilter("Saved")
-                    }
-                },
-                onSelectStack = { stack ->
-                    if (onOpenSavedStack != null) {
-                        onOpenSavedStack(stack)
-                    } else {
-                        onFilter("Saved")
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("albums_saved_preview_section")
-            )
-        }
 
         // 3. Maps Card (strictly black-grey-white)
         item {

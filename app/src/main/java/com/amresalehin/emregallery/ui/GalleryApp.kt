@@ -139,6 +139,7 @@ fun GalleryApp() {
     var inboxInitialViewMode by remember { mutableStateOf(DownloaderViewMode.SEARCH_PAGE) }
     var inboxInitialStack by remember { mutableStateOf<com.amresalehin.emregallery.data.MediaInboxStack?>(null) }
     var inboxInitialOpenBrowser by remember { mutableStateOf(false) }
+    var isPocketDetailOpen by remember { mutableStateOf(false) }
 
     var isRefreshing by remember { mutableStateOf(false) }
 
@@ -540,6 +541,7 @@ fun GalleryApp() {
         inboxInitialViewMode = newInboxInitialViewMode
         inboxInitialStack = newInboxInitialStack
         inboxInitialOpenBrowser = newInboxInitialOpenBrowser
+        isPocketDetailOpen = false
     }
 
     fun openMediaInViewer(item: MediaItem, list: List<MediaItem>) {
@@ -644,7 +646,6 @@ fun GalleryApp() {
             }
             destination in listOf(
                 Destination.LIBRARY_OVERVIEW,
-                Destination.INDEXING_STATUS,
                 Destination.OCR_SETTINGS,
                 Destination.ABOUT
             ) -> {
@@ -891,28 +892,11 @@ fun GalleryApp() {
                         },
                         onFilter = { when (it) { "Map" -> {
                             navigateTo(Destination.MAP, rememberPrevious = true, newMapFocusItem = null)
-                        }; "Folders" -> navigateTo(Destination.DEVICE_FOLDERS); "Albums" -> navigateTo(Destination.ALBUM_CATALOG); "Favourites" -> { albumFilter = null; navigateTo(Destination.FAVOURITES) }; "Bin" -> { albumFilter = null; navigateTo(Destination.BIN) }; "Videos" -> { albumFilter = null; navigateTo(Destination.VIDEOS) }; "Recently added" -> { albumFilter = null; navigateTo(Destination.RECENTLY_ADDED) }; "Hidden", "Locked folder" -> { albumFilter = null; navigateTo(Destination.LOCKED_FOLDER) }; "Archive" -> { albumFilter = null; navigateTo(Destination.ARCHIVE) }; "People" -> { albumFilter = null; activePersonId = null; navigateTo(Destination.PEOPLE) }; "Saved", "Saved Media Library", "Saved Library" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.SAVED_LIBRARY) }; "Media Downloader", "Media Inbox", "Inbox" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.SEARCH_PAGE) }; "Browser" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.SEARCH_PAGE, newInboxInitialOpenBrowser = true) }; else -> { albumFilterReturnDestination = Destination.ALBUMS; albumFilter = it; navigateTo(Destination.HOME) } } },
+                        }; "Folders" -> navigateTo(Destination.DEVICE_FOLDERS); "Albums" -> navigateTo(Destination.ALBUM_CATALOG); "Favourites" -> { albumFilter = null; navigateTo(Destination.FAVOURITES) }; "Bin" -> { albumFilter = null; navigateTo(Destination.BIN) }; "Videos" -> { albumFilter = null; navigateTo(Destination.VIDEOS) }; "Recently added" -> { albumFilter = null; navigateTo(Destination.RECENTLY_ADDED) }; "Hidden", "Locked folder" -> { albumFilter = null; navigateTo(Destination.LOCKED_FOLDER) }; "Archive" -> { albumFilter = null; navigateTo(Destination.ARCHIVE) }; "People" -> { albumFilter = null; activePersonId = null; navigateTo(Destination.PEOPLE) }; "Pocket", "Saved", "Saved Media Library", "Saved Library", "Bookmarks" -> { albumFilter = null; navigateTo(Destination.POCKET, rememberPrevious = true) }; "Activity", "Activities", "Activity Page" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.ACTIVITY_PAGE) }; "Media Downloader", "Media Inbox", "Inbox" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.SEARCH_PAGE) }; "Browser" -> { albumFilter = null; navigateTo(dest = Destination.MEDIA_INBOX, rememberPrevious = true, newInboxInitialViewMode = DownloaderViewMode.SEARCH_PAGE, newInboxInitialOpenBrowser = true) }; else -> { albumFilterReturnDestination = Destination.ALBUMS; albumFilter = it; navigateTo(Destination.HOME) } } },
                         onOpen = { openMediaInViewer(it, visibleMedia) },
                         onOpenPerson = { personId ->
                             activePersonId = personId
                             navigateTo(Destination.PEOPLE)
-                        },
-                        onOpenSavedLibrary = {
-                            albumFilter = null
-                            navigateTo(
-                                dest = Destination.MEDIA_INBOX,
-                                rememberPrevious = true,
-                                newInboxInitialViewMode = DownloaderViewMode.SAVED_LIBRARY
-                            )
-                        },
-                        onOpenSavedStack = { stack ->
-                            albumFilter = null
-                            navigateTo(
-                                dest = Destination.MEDIA_INBOX,
-                                rememberPrevious = true,
-                                newInboxInitialViewMode = DownloaderViewMode.SAVED_LIBRARY,
-                                newInboxInitialStack = stack
-                            )
                         },
                         onCreateAlbumClick = { parentPreset ->
                             createAlbumPresetParent = parentPreset
@@ -1086,7 +1070,7 @@ fun GalleryApp() {
                                 performBackNavigation()
                             },
                             onOpenMedia = { item -> openMediaInViewer(item, peopleMedia) },
-                            onOpenIndexStatus = { navigateTo(Destination.INDEXING_STATUS) }
+                            onOpenIndexStatus = { navigateTo(Destination.SETTINGS) }
                         )
                     }
                     Destination.MAP -> {
@@ -1125,33 +1109,32 @@ fun GalleryApp() {
                             navigateTo(Destination.HOME)
                         }
                     )
+                    Destination.POCKET -> PocketScreen(
+                        topContentPadding = topContentPadding,
+                        bottomContentPadding = bottomContentPadding,
+                        onMenuClick = { showSidePanel = true },
+                        onOpenMediaItem = { uriStr ->
+                            val matched = media.firstOrNull { it.uri == uriStr }
+                            if (matched != null) {
+                                openMediaInViewer(matched, media)
+                            }
+                        },
+                        onOpenMediaWithList = { uriStr, allUris ->
+                            val matched = media.firstOrNull { it.uri == uriStr }
+                            val list = allUris.mapNotNull { u -> media.firstOrNull { it.uri == u } }
+                            if (matched != null && list.isNotEmpty()) {
+                                openMediaInViewer(matched, list)
+                            } else if (matched != null) {
+                                openMediaInViewer(matched, media)
+                            }
+                        },
+                        onDetailViewerStateChange = { isPocketDetailOpen = it }
+                    )
                     Destination.SETTINGS -> SettingsScreen(
+                        media = media.filter { it.uri !in hidden && !it.isTrashed && it.uri !in inBin && it.uri !in archive },
                         total = media.size,
                         onMenuClick = { showSidePanel = true },
                         theme = themePref,
-                        topContentPadding = statusBarTop + 14.dp,
-                        bottomContentPadding = bottomContentPadding,
-                        onTheme = { scope.launch { prefs.setTheme(it) } },
-                        onRefresh = { refreshMedia() },
-                        onSettings = { label ->
-                            when (label) {
-                                "Indexing Status" -> navigateTo(Destination.INDEXING_STATUS)
-                                "About" -> navigateTo(Destination.ABOUT)
-                            }
-                        },
-                        onPermissionSettings = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) },
-                        prefs = prefs,
-                        onShowSnackbar = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
-                    )
-                    Destination.LIBRARY_OVERVIEW -> LibraryOverviewScreen(
-                        media = media.filter { it.uri !in hidden && !it.isTrashed && it.uri !in inBin && it.uri !in archive },
-                        loading = loading,
-                        isRefreshing = isRefreshing,
-                        onBack = { performBackNavigation() },
-                        onRefresh = { refreshMedia(userInitiated = true) }
-                    )
-                    Destination.INDEXING_STATUS -> IndexingStatusScreen(
-                        media = media.filter { it.uri !in hidden && !it.isTrashed && it.uri !in inBin && it.uri !in archive },
                         ocrLanguages = ocrLanguagesPref,
                         ocrModel = ocrModelPref,
                         ocrEngine = ocrEnginePref,
@@ -1185,10 +1168,25 @@ fun GalleryApp() {
                             }
                             scope.launch { prefs.setMlKitLanguages(updated) }
                         },
-                        onOpenMap = {
-                            navigateTo(Destination.MAP)
+                        topContentPadding = statusBarTop + 14.dp,
+                        bottomContentPadding = bottomContentPadding,
+                        onTheme = { scope.launch { prefs.setTheme(it) } },
+                        onRefresh = { refreshMedia() },
+                        onSettings = { label ->
+                            when (label) {
+                                "About" -> navigateTo(Destination.ABOUT)
+                            }
                         },
-                        onBack = { performBackNavigation() }
+                        onPermissionSettings = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) },
+                        prefs = prefs,
+                        onShowSnackbar = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                    Destination.LIBRARY_OVERVIEW -> LibraryOverviewScreen(
+                        media = media.filter { it.uri !in hidden && !it.isTrashed && it.uri !in inBin && it.uri !in archive },
+                        loading = loading,
+                        isRefreshing = isRefreshing,
+                        onBack = { performBackNavigation() },
+                        onRefresh = { refreshMedia(userInitiated = true) }
                     )
                     Destination.OCR_SETTINGS -> OcrSettingsScreen(
                         currentEngine = ocrEnginePref,
@@ -1533,8 +1531,8 @@ fun GalleryApp() {
             }
         }
 
-        // Floating Bottom Navigation Bar across Home, Albums, Settings - coordinated entrance upward from below screen edge
-        val showBottomBarContainer = ((returnDestination in listOf(Destination.HOME, Destination.ALBUMS, Destination.SETTINGS) && albumFilter == null) || homeSelectedUris.isNotEmpty()) && destination != Destination.VIEWER
+        // Floating Bottom Navigation Bar across Home, Albums, Pocket, Settings - coordinated entrance upward from below screen edge
+        val showBottomBarContainer = ((returnDestination in listOf(Destination.HOME, Destination.ALBUMS, Destination.POCKET, Destination.SETTINGS) && albumFilter == null) || homeSelectedUris.isNotEmpty()) && destination != Destination.VIEWER && !isPocketDetailOpen
         if (showBottomBarContainer) {
             Box(
                 modifier = Modifier
@@ -1553,7 +1551,7 @@ fun GalleryApp() {
                             alpha = (1f - cp * 1.15f).coerceIn(0f, 1f)
                         }
                 ) {
-                    if (albumFilter == null && returnDestination in listOf(Destination.HOME, Destination.ALBUMS, Destination.SETTINGS)) {
+                    if (albumFilter == null && returnDestination in listOf(Destination.HOME, Destination.ALBUMS, Destination.POCKET, Destination.SETTINGS)) {
                         FloatingNavigationBar(
                             current = returnDestination,
                             onSelect = { dest ->

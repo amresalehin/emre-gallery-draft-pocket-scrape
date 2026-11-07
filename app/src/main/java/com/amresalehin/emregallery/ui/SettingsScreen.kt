@@ -1,5 +1,10 @@
 package com.amresalehin.emregallery.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -27,13 +32,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.amresalehin.emregallery.data.MediaItem
 import com.amresalehin.emregallery.data.PreferencesRepository
+import com.amresalehin.emregallery.face.BuffaloLFaceEngine
+import com.amresalehin.emregallery.face.EngineComparisonResult
+import com.amresalehin.emregallery.face.FaceClusterStore
+import com.amresalehin.emregallery.face.FaceRecognitionSettings
+import com.amresalehin.emregallery.ocr.TesseractOcr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.NumberFormat
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    total: Int,
+    media: List<MediaItem> = emptyList(),
+    total: Int = 0,
     theme: String,
+    ocrLanguages: Set<String> = setOf("eng"),
+    ocrModel: String = "fast",
+    ocrEngine: String = "tesseract",
+    mlKitLanguages: Set<String> = setOf("latin"),
+    onModelChange: ((String) -> Unit)? = null,
+    onEngineChange: ((String) -> Unit)? = null,
+    onToggleLanguage: ((String) -> Unit)? = null,
+    onToggleMlKitLanguage: ((String) -> Unit)? = null,
     topContentPadding: Dp,
     bottomContentPadding: Dp,
     onTheme: (String) -> Unit,
@@ -42,21 +70,90 @@ fun SettingsScreen(
     onPermissionSettings: () -> Unit,
     onMenuClick: () -> Unit,
     prefs: PreferencesRepository? = null,
-    onShowSnackbar: ((String) -> Unit)? = null
+    onShowSnackbar: ((String) -> Unit)? = null,
+    indexingViewModel: IndexingStatusViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val actualPrefs = prefs ?: remember {
         PreferencesRepository(context.applicationContext)
     }
+    val uiState by indexingViewModel.uiState.collectAsStateWithLifecycle()
+    val faceStore = remember { FaceClusterStore(context.applicationContext) }
+
+    var activeTargetEngineId by remember { mutableStateOf(BuffaloLFaceEngine.ENGINE_ID) }
+    var showFaceScanOptions by remember { mutableStateOf(false) }
+    var showModelRequiredDialog by remember { mutableStateOf(false) }
+    var showComparisonDialog by remember { mutableStateOf(false) }
+    var comparisonResult by remember { mutableStateOf<EngineComparisonResult?>(null) }
+
+    val availableFolders = remember(media) {
+        media.filterNot { it.isVideo }
+            .groupBy { FaceRecognitionSettings.normalizeFolderPath(it.relativePath) }
+            .map { (path, items) ->
+                FaceFolderInfo(
+                    path = path,
+                    name = path.substringAfterLast('/').ifBlank { "Internal storage" },
+                    photoCount = items.size,
+                    coverUri = items.firstOrNull()?.uri
+                )
+            }
+            .sortedByDescending { it.photoCount }
+    }
+
+    // Request notification permission on Android 13+ (POST_NOTIFICATIONS)
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* Permission result is reflected by Android notification settings. */ }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    LaunchedEffect(media, ocrLanguages, ocrModel, ocrEngine, mlKitLanguages) {
+        indexingViewModel.setMedia(media, ocrLanguages, ocrModel, ocrEngine, mlKitLanguages)
+    }
+
     var query by remember { mutableStateOf("") }
 
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val lightAppearance = !isDark
+    val cardBackground = if (lightAppearance) Color.White else MaterialTheme.colorScheme.surfaceContainer
+    val cardBorder = BorderStroke(
+        1.dp,
+        if (lightAppearance) Color(0xFFE5E7EB) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+    )
+    val numberFormat = remember { NumberFormat.getIntegerInstance(Locale.getDefault()) }
 
     val matchesTheme = query.isBlank() ||
         "theme".contains(query, ignoreCase = true) ||
         "dark".contains(query, ignoreCase = true) ||
         "light".contains(query, ignoreCase = true) ||
         "mode".contains(query, ignoreCase = true)
+
+    val matchesOcr = query.isBlank() ||
+        "ocr".contains(query, ignoreCase = true) ||
+        "text".contains(query, ignoreCase = true) ||
+        "recognition".contains(query, ignoreCase = true) ||
+        "language".contains(query, ignoreCase = true) ||
+        "tesseract".contains(query, ignoreCase = true) ||
+        "ml kit".contains(query, ignoreCase = true) ||
+        "scan".contains(query, ignoreCase = true)
+
+    val matchesFace = query.isBlank() ||
+        "face".contains(query, ignoreCase = true) ||
+        "people".contains(query, ignoreCase = true) ||
+        "recognition".contains(query, ignoreCase = true) ||
+        "clustering".contains(query, ignoreCase = true) ||
+        "buffalo".contains(query, ignoreCase = true) ||
+        "ente".contains(query, ignoreCase = true)
 
     val matchesAi = query.isBlank() ||
         "ai configuration".contains(query, ignoreCase = true) ||
@@ -67,7 +164,6 @@ fun SettingsScreen(
         "provider".contains(query, ignoreCase = true)
 
     val otherEntries = listOf(
-        "Indexing Status" to Icons.Default.Storage,
         "About" to Icons.Default.Info
     ).filter { it.first.contains(query, ignoreCase = true) }
 
@@ -76,13 +172,13 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(
                 top = topContentPadding + 64.dp,
                 bottom = bottomContentPadding
             )
         ) {
-            // 1. THEME CARD (Moved to the very top with sleek Welcome Screen aesthetics)
+            // 1. THEME CARD (At the very top)
             if (matchesTheme) {
                 item(key = "theme_card") {
                     AestheticThemeCard(
@@ -93,7 +189,125 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. AI CONFIGURATION CARD
+            // 2. OCR CARD (Moved out of indexing status page and placed below theme card)
+            if (matchesOcr) {
+                item(key = "ocr_indexing_card") {
+                    OcrIndexingCard(
+                        totalPhotos = uiState.totalPhotos,
+                        ocrState = uiState.ocr,
+                        ocrLanguages = ocrLanguages,
+                        countsReady = uiState.countsReady,
+                        cardBackground = cardBackground,
+                        cardBorder = cardBorder,
+                        numberFormat = numberFormat,
+                        onToggleOcr = indexingViewModel::toggleOcr,
+                        onStopOcr = indexingViewModel::stopOcr,
+                        onReindexOcr = indexingViewModel::clearAndReindexOcr,
+                        onEngineChange = { newEngine ->
+                            indexingViewModel.setOcrEngine(newEngine)
+                            onEngineChange?.invoke(newEngine)
+                        },
+                        onModelChange = { newModel ->
+                            indexingViewModel.setOcrModel(newModel)
+                            onModelChange?.invoke(newModel)
+                        },
+                        onToggleLanguage = { code ->
+                            onToggleLanguage?.invoke(code)
+                        },
+                        onToggleMlKitLanguage = { code ->
+                            onToggleMlKitLanguage?.invoke(code)
+                        },
+                        onClearCache = {
+                            scope.launch(Dispatchers.IO) {
+                                TesseractOcr.clearCachedResults(context)
+                                withContext(Dispatchers.Main) {
+                                    indexingViewModel.refreshCounts()
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 3. FACE RECOGNITION CARD (Moved out of indexing status page and placed below theme card)
+            if (matchesFace) {
+                item(key = "face_recognition_card") {
+                    FaceRecognitionCard(
+                        totalPhotos = uiState.totalPhotos,
+                        faceFindingState = uiState.faceFinding,
+                        engineState = uiState.engine,
+                        modelDownloadState = uiState.modelDownload,
+                        clusteringState = uiState.clustering,
+                        enteFaceFindingState = uiState.enteFaceFinding,
+                        enteModelDownloadState = uiState.enteModelDownload,
+                        enteClusteringState = uiState.enteClustering,
+                        countsReady = uiState.countsReady,
+                        cardBackground = cardBackground,
+                        cardBorder = cardBorder,
+                        numberFormat = numberFormat,
+                        onConfidenceChange = indexingViewModel::updateDetectionConfidence,
+                        onMinGroupFacesChange = indexingViewModel::updateMinGroupFaces,
+                        onClusterDistanceChange = indexingViewModel::updateClusterDistance,
+                        onToggleFaceFinding = { eng ->
+                            activeTargetEngineId = eng
+                            indexingViewModel.toggleFaceFinding(
+                                onNeedsModelDownload = { showModelRequiredDialog = true },
+                                engineId = eng
+                            )
+                        },
+                        onStopFaceFinding = { eng -> indexingViewModel.stopFaceFinding(eng) },
+                        onRescanRequested = { eng ->
+                            activeTargetEngineId = eng
+                            showFaceScanOptions = true
+                        },
+                        onDownloadModel = { force, eng ->
+                            activeTargetEngineId = eng
+                            indexingViewModel.startModelDownload(force, eng)
+                        },
+                        onCancelDownload = { eng -> indexingViewModel.cancelModelDownload(eng) },
+                        onClusterFaces = { threshold, eng -> indexingViewModel.runFaceClustering(threshold, eng) },
+                        onResetClusters = { eng -> indexingViewModel.resetFaceClusters(eng) },
+                        onRetryFailedFaces = { eng -> indexingViewModel.retryFailedFaces(eng) },
+                        availableFolders = availableFolders,
+                        onToggleFolder = { folderPath ->
+                            val isAll = uiState.faceFinding.isAllFolders
+                            val currentSelected = uiState.faceFinding.selectedFolders
+                            if (isAll) {
+                                indexingViewModel.setFaceIndexingFolders(allFolders = false, folders = setOf(folderPath))
+                            } else {
+                                val newSelected = if (folderPath in currentSelected) {
+                                    currentSelected - folderPath
+                                } else {
+                                    currentSelected + folderPath
+                                }
+                                if (newSelected.isEmpty() || newSelected.size >= availableFolders.size) {
+                                    indexingViewModel.setFaceIndexingFolders(allFolders = true, folders = emptySet())
+                                } else {
+                                    indexingViewModel.setFaceIndexingFolders(allFolders = false, folders = newSelected)
+                                }
+                            }
+                        },
+                        onSelectAllFolders = {
+                            indexingViewModel.setFaceIndexingFolders(allFolders = true, folders = emptySet())
+                        },
+                        onComparePipelines = {
+                            scope.launch(Dispatchers.IO) {
+                                val commonUri = faceStore.findCommonIndexedMediaUri(BuffaloLFaceEngine.ENGINE_ID, com.amresalehin.emregallery.face.EnteFaceConstants.ENGINE_ID)
+                                    ?: media.firstOrNull { !it.isVideo }?.uri
+                                if (commonUri != null) {
+                                    val result = faceStore.compareEnginesOnMedia(mediaUri = commonUri, context = context)
+                                    withContext(Dispatchers.Main) {
+                                        comparisonResult = result
+                                        showComparisonDialog = true
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 4. AI CONFIGURATION CARD
             if (matchesAi) {
                 item(key = "ai_configuration_card") {
                     AiConfigurationCard(
@@ -103,21 +317,20 @@ fun SettingsScreen(
                 }
             }
 
-            // 3. OTHER SETTINGS TILES ("Indexing Status", "About")
+            // 5. OTHER SETTINGS TILES ("About")
             items(otherEntries, key = { it.first }) { (label, icon) ->
                 AestheticSettingsTile(
                     label = label,
                     icon = icon,
                     isDark = isDark,
                     onClick = {
-                        if (label == "Indexing Status") onRefresh()
                         onSettings(label)
                     }
                 )
             }
 
             // Empty search state
-            if (!matchesTheme && !matchesAi && otherEntries.isEmpty() && query.isNotBlank()) {
+            if (!matchesTheme && !matchesOcr && !matchesFace && !matchesAi && otherEntries.isEmpty() && query.isNotBlank()) {
                 item {
                     Box(
                         modifier = Modifier
@@ -238,6 +451,104 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    // Dialogs
+    if (showFaceScanOptions) {
+        FaceScanOptionsDialog(
+            onDismiss = { showFaceScanOptions = false },
+            onRescanAll = {
+                showFaceScanOptions = false
+                indexingViewModel.clearAndRescanFaces(
+                    onNeedsModelDownload = { showModelRequiredDialog = true },
+                    engineId = activeTargetEngineId
+                )
+            },
+            onRemainingOnly = {
+                showFaceScanOptions = false
+                indexingViewModel.toggleFaceFinding(
+                    onNeedsModelDownload = { showModelRequiredDialog = true },
+                    engineId = activeTargetEngineId
+                )
+            }
+        )
+    }
+
+    if (showModelRequiredDialog) {
+        ModelDownloadRequiredDialog(
+            onDismiss = { showModelRequiredDialog = false },
+            onDownloadModel = {
+                showModelRequiredDialog = false
+                indexingViewModel.startModelDownload(engineId = activeTargetEngineId)
+            }
+        )
+    }
+
+    val currentComparisonResult = comparisonResult
+    if (showComparisonDialog && currentComparisonResult != null) {
+        val comp = currentComparisonResult
+        AlertDialog(
+            onDismissRequest = { showComparisonDialog = false },
+            title = {
+                Text(
+                    "Pipeline Comparison",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Sample: ${comp.mediaUri.substringAfterLast('/')}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Buffalo_L (InsightFace SCRFD-10GF)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Detected faces: ${comp.facesA.size}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Ente (YOLO5Face-small)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                "Detected faces: ${comp.facesB.size}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    Text(
+                        "Spatial Overlap (IoU >= ${FaceRecognitionSettings.COMPARISON_IOU_THRESHOLD}): ${comp.matchingFaceCount} face(s)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showComparisonDialog = false }) {
+                    Text("Done")
+                }
+            }
+        )
     }
 }
 
@@ -387,7 +698,7 @@ private fun ThemeSignatureIcon(
 
             // Bottom-right
             drawLine(tint, androidx.compose.ui.geometry.Offset(w, h), androidx.compose.ui.geometry.Offset(w - cornerLength, h), strokeWidth)
-            drawLine(tint, androidx.compose.ui.geometry.Offset(w, h), androidx.compose.ui.geometry.Offset(w, h - cornerLength), strokeWidth)
+            drawLine(tint, androidx.compose.ui.geometry.Offset(w, h), androidx.compose.ui.geometry.Offset(w - cornerLength, h), strokeWidth)
         }
         Icon(
             imageVector = Icons.Default.Palette,
@@ -438,7 +749,7 @@ private fun SingleRowThemeOption(
 }
 
 /**
- * Aesthetic Settings Tile for Indexing Status, About, etc. matching the 26.dp rounded card style.
+ * Aesthetic Settings Tile for About, etc. matching the 26.dp rounded card style.
  */
 @Composable
 private fun AestheticSettingsTile(
@@ -502,7 +813,6 @@ private fun AestheticSettingsTile(
                     )
                 )
                 val subtitle = when (label) {
-                    "Indexing Status" -> "Local MediaStore scan & OCR status"
                     "About" -> "Emre Gallery · 0.1.0"
                     else -> ""
                 }

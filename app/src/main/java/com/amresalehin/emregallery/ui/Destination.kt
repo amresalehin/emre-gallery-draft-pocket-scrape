@@ -3,6 +3,7 @@ package com.amresalehin.emregallery.ui
 enum class Destination {
     HOME,
     ALBUMS,
+    POCKET,
     FAVOURITES,
     BIN,
     VIDEOS,
@@ -15,7 +16,6 @@ enum class Destination {
     ALBUM_CATALOG,
     SETTINGS,
     LIBRARY_OVERVIEW,
-    INDEXING_STATUS,
     OCR_SETTINGS,
     ABOUT,
     SEARCH,

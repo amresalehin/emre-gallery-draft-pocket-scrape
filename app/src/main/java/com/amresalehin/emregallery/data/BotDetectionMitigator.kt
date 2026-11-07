@@ -93,6 +93,6 @@ object BotDetectionMitigator {
                 t.startsWith("sign in") ||
                 t.startsWith("log in") ||
                 t.startsWith("login") ||
-                t.contains("sign in - google") ||
+                t.contains("sign in - google")
     }
 }

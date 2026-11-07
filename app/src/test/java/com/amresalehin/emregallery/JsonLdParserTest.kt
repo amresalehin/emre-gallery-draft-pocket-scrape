@@ -112,7 +112,8 @@ class JsonLdParserTest {
 
     @Test
     fun ignoresOversizedScriptsAndReportsTheLimit() {
-        val oversized = " ".repeat(JsonLdParser.MAX_SCRIPT_CHARACTERS + 1)
+        val padding = "x".repeat(JsonLdParser.MAX_SCRIPT_CHARACTERS)
+        val oversized = """{"@type":"Thing","payload":"$padding"}"""
         val result = JsonLdParser.parse(
             html(oversized, """{"@type":"WebPage","name":"Small valid"}"""),
             pageUrl = "https://example.com/"

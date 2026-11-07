@@ -563,7 +563,6 @@ def extract_yt_dlp(url, options_json="{}"):
             "retries": 3,
             "fragment_retries": 3,
             "http_headers": http_headers,
-            }
         }
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file
@@ -769,7 +768,6 @@ def _download_with_ytdlp(url, target_path, referer, user_agent, cookies, extra_h
             "retries": 3,
             "fragment_retries": 3,
             "http_headers": http_headers,
-            }
         }
         if cookie_file:
             ydl_opts["cookiefile"] = cookie_file

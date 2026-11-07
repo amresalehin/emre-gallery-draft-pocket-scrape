@@ -47,7 +47,15 @@ class PageIntelligenceServiceTest {
 
             val requested = server.url("/short-link").toString()
             val expectedFinal = server.url("/articles/current").toString()
-            val result = runBlocking { PageIntelligenceService(testFetcher()).inspect(requested) }
+            var parserReceivedJsonLd = false
+            val service = PageIntelligenceService(
+                pageFetcher = testFetcher(),
+                structuredDataParser = { html, pageUrl ->
+                    parserReceivedJsonLd = html.contains("application/ld+json") && html.contains("Structured headline")
+                    JsonLdParser.parse(html, pageUrl)
+                }
+            )
+            val result = runBlocking { service.inspect(requested) }
 
             assertTrue(result is PageIntelligenceResult.Success)
             val snapshot = (result as PageIntelligenceResult.Success).snapshot
@@ -57,6 +65,7 @@ class PageIntelligenceServiceTest {
             assertEquals("text/html", snapshot.contentType)
             assertTrue(snapshot.bodyBytes > 0L)
             assertEquals(2, server.requestCount)
+            assertTrue("Fetched HTML did not contain the JSON-LD script payload", parserReceivedJsonLd)
 
             val metadata = (snapshot.metadata as PageIntelligenceExtraction.Success).value
             assertEquals(expectedFinal, metadata.sourcePageUrl)
@@ -101,14 +110,20 @@ class PageIntelligenceServiceTest {
                     .setBody("""<script type="application/ld+json">{"@type":"WebPage","name":"Structured page"}</script>""")
             )
             server.start()
+            var parserReceivedJsonLd = false
             val service = PageIntelligenceService(
                 pageFetcher = testFetcher(),
-                metadataParser = { _, _ -> throw IllegalStateException("forced metadata parser failure") }
+                metadataParser = { _, _ -> throw IllegalStateException("forced metadata parser failure") },
+                structuredDataParser = { html, pageUrl ->
+                    parserReceivedJsonLd = html.contains("application/ld+json") && html.contains("Structured page")
+                    JsonLdParser.parse(html, pageUrl)
+                }
             )
 
             val result = runBlocking { service.inspect(server.url("/page").toString()) }
 
             assertTrue(result is PageIntelligenceResult.Success)
+            assertTrue("Fetched HTML did not contain the JSON-LD script payload", parserReceivedJsonLd)
             val snapshot = (result as PageIntelligenceResult.Success).snapshot
             assertTrue(snapshot.metadata is PageIntelligenceExtraction.Failure)
             assertEquals(

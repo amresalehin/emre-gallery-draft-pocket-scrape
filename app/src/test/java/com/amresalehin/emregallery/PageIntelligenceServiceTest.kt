@@ -9,6 +9,8 @@ import com.amresalehin.emregallery.data.PageIntelligenceResult
 import com.amresalehin.emregallery.data.PageIntelligenceService
 import com.amresalehin.emregallery.data.PageKind
 import com.amresalehin.emregallery.data.PageMetadataParser
+import com.amresalehin.emregallery.data.PagePreviewImageRole
+import com.amresalehin.emregallery.data.PagePreviewSource
 import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.HttpUrl
@@ -42,7 +44,7 @@ class PageIntelligenceServiceTest {
                         <html><head>
                           <title>Document fallback</title>
                           <meta property="og:title" content="Current story">
-                          <meta property="og:image" content="/previews/cover.jpg">
+                          <meta property="og:image" content="https://cdn.example.com/previews/cover.jpg">
                           <script type="application/ld+json">
                             {"@type":"Article","headline":"Structured headline","url":"related"}
                           </script>
@@ -77,7 +79,7 @@ class PageIntelligenceServiceTest {
             val metadata = (snapshot.metadata as PageIntelligenceExtraction.Success).value
             assertEquals(expectedFinal, metadata.sourcePageUrl)
             assertEquals("Current story", metadata.title)
-            assertEquals(server.url("/previews/cover.jpg").toString(), metadata.previewImageUrl)
+            assertEquals("https://cdn.example.com/previews/cover.jpg", metadata.previewImageUrl)
 
             val structured = (snapshot.structuredData as PageIntelligenceExtraction.Success).value
             assertEquals(expectedFinal, structured.sourcePageUrl)
@@ -85,6 +87,10 @@ class PageIntelligenceServiceTest {
             assertEquals(server.url("/articles/related").toString(), structured.entities.single().url)
             assertEquals(PageKind.ARTICLE, snapshot.classification.kind)
             assertFalse(snapshot.classification.isAmbiguous)
+            assertEquals(expectedFinal, snapshot.preview.sourcePageUrl)
+            assertEquals(metadata.previewImageUrl, snapshot.preview.imageUrl)
+            assertEquals(PagePreviewImageRole.PAGE_PREVIEW, snapshot.preview.imageRole)
+            assertEquals(PagePreviewSource.OPEN_GRAPH, snapshot.preview.imageEvidence?.source)
         }
     }
 

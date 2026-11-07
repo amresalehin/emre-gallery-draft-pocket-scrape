@@ -26,7 +26,8 @@ data class PageIntelligenceSnapshot(
     val bodyBytes: Long,
     val metadata: PageIntelligenceExtraction<PageMetadata>,
     val structuredData: PageIntelligenceExtraction<JsonLdParseResult>,
-    val classification: PageClassification
+    val classification: PageClassification,
+    val preview: PagePreview
 )
 
 sealed interface PageIntelligenceResult {
@@ -73,6 +74,12 @@ class PageIntelligenceService(
                     is PageIntelligenceExtraction.Failure -> null
                 }
                 val classification = PageClassifier.classify(metadataValue, structuredDataValue)
+                val preview = PagePreviewResolver.resolve(
+                    sourcePageUrl = fetched.finalUrl,
+                    metadata = metadataValue,
+                    structuredData = structuredDataValue,
+                    classification = classification
+                )
 
                 PageIntelligenceResult.Success(
                     PageIntelligenceSnapshot(
@@ -83,7 +90,8 @@ class PageIntelligenceService(
                         bodyBytes = fetched.bodyBytes,
                         metadata = metadata,
                         structuredData = structuredData,
-                        classification = classification
+                        classification = classification,
+                        preview = preview
                     )
                 )
             }

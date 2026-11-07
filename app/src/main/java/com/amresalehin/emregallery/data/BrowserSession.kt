@@ -52,17 +52,23 @@ class BrowserTabSession(
 
     fun updateNavigation(newUrl: String, newTitle: String? = null) {
         val cleanUrl = newUrl.trim()
-        if (cleanUrl != _url.value) {
-            _url.value = cleanUrl
-            // Reset candidates when navigating to a genuinely different web domain
-            val oldDomain = runCatching { URL(_url.value).host }.getOrDefault("")
-            val newDomain = runCatching { URL(cleanUrl).host }.getOrDefault("")
-            if (oldDomain.isNotBlank() && newDomain.isNotBlank() && oldDomain != newDomain) {
-                clearMedia()
+        synchronized(itemsLock) {
+            val previousUrl = _url.value
+            if (cleanUrl != previousUrl) {
+                // Capture the previous host before publishing the new URL. Comparing after
+                // assignment made both hosts identical and allowed old-page media to leak.
+                val oldDomain = runCatching { URL(previousUrl).host.lowercase(Locale.ROOT) }.getOrDefault("")
+                val newDomain = runCatching { URL(cleanUrl).host.lowercase(Locale.ROOT) }.getOrDefault("")
+                if (oldDomain != newDomain && candidatesMap.isNotEmpty()) {
+                    candidatesMap.clear()
+                    _detectedItems.value = emptyList()
+                    _detectedCount.value = 0
+                }
+                _url.value = cleanUrl
             }
-        }
-        if (!newTitle.isNullOrBlank()) {
-            _title.value = newTitle
+            if (!newTitle.isNullOrBlank()) {
+                _title.value = newTitle
+            }
         }
     }
 

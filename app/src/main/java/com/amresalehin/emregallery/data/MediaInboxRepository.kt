@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 data class MediaInboxItem(
     val id: String,
@@ -191,7 +192,7 @@ class MediaInboxRepository(private val context: Context) {
 
         val cleanDomain = domain.ifBlank { MediaClassifier.cleanDomainFromUrl(cleanUrl) }
         val bookmarkStack = MediaInboxStack(
-            id = "bookmark_${System.currentTimeMillis()}",
+            id = "bookmark_${UUID.randomUUID()}",
             title = title.ifBlank { cleanDomain.ifBlank { cleanUrl } },
             sourceDomain = cleanDomain,
             sourceUrl = cleanUrl,

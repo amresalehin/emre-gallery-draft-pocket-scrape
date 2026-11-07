@@ -1,0 +1,53 @@
+package com.amresalehin.emregallery.data
+
+import java.util.UUID
+
+/**
+ * Represents a configured Cloud AI Provider (e.g. OpenAI, Groq, Ollama, OpenRouter, Anthropic).
+ */
+data class CloudAiProvider(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val baseUrl: String,
+    val apiKey: String,
+    val modelId: String,
+    val isActive: Boolean = false,
+    val status: CloudProviderStatus = CloudProviderStatus.UNCONFIGURED,
+    val statusMessage: String? = null,
+    val lastCheckedTimestamp: Long = 0L
+)
+
+enum class CloudProviderStatus {
+    UNCONFIGURED,
+    CHECKING,
+    CONNECTED,
+    ERROR
+}
+
+data class CloudTestResult(
+    val status: CloudProviderStatus,
+    val message: String,
+    val latencyMs: Long = 0L
+)
+
+/**
+ * Represents the current installation and readiness state of the local Florence-2 model.
+ */
+enum class FlorenceStatus {
+    NOT_INSTALLED,
+    DOWNLOADING,
+    VERIFYING,
+    INSTALLED,
+    ERROR
+}
+
+data class FlorenceModelState(
+    val status: FlorenceStatus = FlorenceStatus.NOT_INSTALLED,
+    val progress: Float = 0f,
+    val bytesDownloaded: Long = 0L,
+    val totalBytes: Long = 0L,
+    val errorMessage: String? = null,
+    val installedSizeBytes: Long = 0L,
+    val installedPath: String? = null,
+    val lastUpdated: Long = 0L
+)

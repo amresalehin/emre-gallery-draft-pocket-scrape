@@ -1,5 +1,6 @@
 package com.amresalehin.emregallery
 
+import com.amresalehin.emregallery.data.ExtractionSource
 import com.amresalehin.emregallery.data.MediaCaptureEngine
 import org.json.JSONArray
 import org.json.JSONObject
@@ -101,6 +102,21 @@ class MediaCaptureEnginePreviewIsolationTest {
                 isMainFrame = false
             )
         )
+    }
+
+    @Test
+    fun mediaCandidatesNeverCopySessionCookiesIntoDownloadHeaders() {
+        val item = MediaCaptureEngine.buildMediaItem(
+            rawUrl = "https://cdn.example.com/photo.jpg",
+            source = ExtractionSource.DOM_SCRAPE,
+            baseUrl = "https://example.com/gallery"
+        )
+
+        assertTrue(item != null)
+        assertFalse(item!!.downloadHeaders.keys.any {
+            it.equals("Cookie", ignoreCase = true) ||
+                    it.equals("Authorization", ignoreCase = true)
+        })
     }
 
     @Test

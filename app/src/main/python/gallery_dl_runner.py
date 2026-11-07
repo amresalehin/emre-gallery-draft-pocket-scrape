@@ -4,6 +4,7 @@ import sys
 import traceback
 import hashlib
 import threading
+from contextlib import contextmanager
 
 _gdl_lock = threading.Lock()
 
@@ -184,6 +185,51 @@ def _prepare_cookiefile(cookies_str, url=None):
     except Exception:
         return None
 
+@contextmanager
+def _temporary_gallery_dl_config(user_agent, cookies, url):
+    """Apply request-scoped gallery-dl credentials and restore global config afterwards."""
+    cookie_file = _prepare_cookiefile(cookies, url)
+    temporary_cookie_file = bool(
+        cookie_file and cookies and not os.path.exists(str(cookies).strip())
+    )
+    previous_user_agent = gdl_config.get(("extractor",), "user-agent")
+    previous_cookies = gdl_config.get(("extractor",), "cookies")
+    try:
+        gdl_config.set(("extractor",), "user-agent", user_agent)
+        gdl_config.unset(("extractor",), "cookies")
+        if cookie_file:
+            gdl_config.set(("extractor",), "cookies", cookie_file)
+        elif cookies:
+            gdl_config.set(("extractor",), "cookies", cookies)
+        yield
+    finally:
+        if previous_user_agent is None:
+            gdl_config.unset(("extractor",), "user-agent")
+        else:
+            gdl_config.set(("extractor",), "user-agent", previous_user_agent)
+
+        if previous_cookies is None:
+            gdl_config.unset(("extractor",), "cookies")
+        else:
+            gdl_config.set(("extractor",), "cookies", previous_cookies)
+
+        if temporary_cookie_file:
+            try:
+                os.remove(cookie_file)
+            except OSError:
+                pass
+
+
+def _cleanup_temporary_cookiefile(cookie_file, cookies):
+    """Delete only cookie files created from an in-memory cookie string."""
+    if not cookie_file or not cookies or os.path.exists(str(cookies).strip()):
+        return
+    try:
+        os.remove(cookie_file)
+    except OSError:
+        pass
+
+
 _ytdlp_extractors_cache = None
 
 def _get_ytdlp_extractors():
@@ -357,7 +403,7 @@ def extract_gallery_dl(url, options_json="{}"):
     except Exception:
         opts = {}
 
-    user_agent = opts.get("user_agent") or "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36"
+    user_agent = opts.get("user_agent") or "EmreGallery/1.0 (Android)"
     cookies = opts.get("cookies")
 
     items = []
@@ -365,20 +411,7 @@ def extract_gallery_dl(url, options_json="{}"):
     seen_urls = set()
 
     try:
-        with _gdl_lock:
-            gdl_config.set(("extractor",), "user-agent", user_agent)
-            cookie_file = _prepare_cookiefile(cookies, clean_url)
-            if cookie_file:
-                try:
-                    gdl_config.set(("extractor",), "cookies", cookie_file)
-                except Exception:
-                    pass
-            elif cookies:
-                try:
-                    gdl_config.set(("extractor",), "cookies", cookies)
-                except Exception:
-                    pass
-
+        with _gdl_lock, _temporary_gallery_dl_config(user_agent, cookies, clean_url):
             ext = gdl_extractor.find(clean_url)
             if ext:
                 data_job = gdl_job.DataJob(ext, file=None, resolve=True)
@@ -502,26 +535,20 @@ def extract_yt_dlp(url, options_json="{}"):
     except Exception:
         opts = {}
 
-    user_agent = opts.get("user_agent") or "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36"
+    user_agent = opts.get("user_agent") or "EmreGallery/1.0 (Android)"
     cookies = opts.get("cookies")
 
     items = []
     page_title = ""
     seen_urls = set()
 
+    cookie_file = None
     try:
         cookie_file = _prepare_cookiefile(cookies, clean_url)
         http_headers = {
             "User-Agent": user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
-            "Sec-Ch-Ua-Mobile": "?1",
-            "Sec-Ch-Ua-Platform": '"Android"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1"
         }
         if cookies:
@@ -533,25 +560,9 @@ def extract_yt_dlp(url, options_json="{}"):
             "skip_download": True,
             "format": "b[vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/bestvideo+bestaudio/best",
             "socket_timeout": 35,
-            "geo_bypass": True,
-            "nocheckcertificate": True,
             "retries": 3,
             "fragment_retries": 3,
             "http_headers": http_headers,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios", "mweb", "web"],
-                    "player_skip": ["webpage", "configs"]
-                },
-                "instagram": {
-                    "api": ["graphql", "web"]
-                },
-                "tiktok": {
-                    "api": ["app", "web"]
-                },
-                "twitter": {
-                    "api": ["syndication", "graphql"]
-                }
             }
         }
         if cookie_file:
@@ -668,6 +679,8 @@ def extract_yt_dlp(url, options_json="{}"):
             "error": f"{e.__class__.__name__}: {str(e)}",
             "items": []
         })
+    finally:
+        _cleanup_temporary_cookiefile(cookie_file, cookies)
 
     return json.dumps({
         "success": len(items) > 0,
@@ -732,14 +745,12 @@ def _download_with_ytdlp(url, target_path, referer, user_agent, cookies, extra_h
     """Downloads media exclusively via yt-dlp."""
     if not YTDLP_AVAILABLE:
         return False
+    cookie_file = None
     try:
         http_headers = {
-            "User-Agent": user_agent or "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36",
+            "User-Agent": user_agent or "EmreGallery/1.0 (Android)",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
-            "Sec-Ch-Ua-Mobile": "?1",
-            "Sec-Ch-Ua-Platform": '"Android"',
         }
         if referer:
             http_headers["Referer"] = referer
@@ -755,25 +766,9 @@ def _download_with_ytdlp(url, target_path, referer, user_agent, cookies, extra_h
             "no_warnings": True,
             "format": "b[vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/bestvideo+bestaudio/best",
             "socket_timeout": 35,
-            "geo_bypass": True,
-            "nocheckcertificate": True,
             "retries": 3,
             "fragment_retries": 3,
             "http_headers": http_headers,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios", "mweb", "web"],
-                    "player_skip": ["webpage", "configs"]
-                },
-                "instagram": {
-                    "api": ["graphql", "web"]
-                },
-                "tiktok": {
-                    "api": ["app", "web"]
-                },
-                "twitter": {
-                    "api": ["syndication", "graphql"]
-                }
             }
         }
         if cookie_file:
@@ -791,6 +786,8 @@ def _download_with_ytdlp(url, target_path, referer, user_agent, cookies, extra_h
             return True
     except Exception:
         pass
+    finally:
+        _cleanup_temporary_cookiefile(cookie_file, cookies)
     return False
 
 def _download_with_gallery_dl(url, target_path, referer, user_agent, cookies, extra_headers):
@@ -798,20 +795,9 @@ def _download_with_gallery_dl(url, target_path, referer, user_agent, cookies, ex
     if not GALLERY_DL_AVAILABLE:
         return False
     try:
-        with _gdl_lock:
-            gdl_config.set(("extractor",), "user-agent", user_agent or "Mozilla/5.0")
-            cookie_file = _prepare_cookiefile(cookies, url)
-            if cookie_file:
-                try:
-                    gdl_config.set(("extractor",), "cookies", cookie_file)
-                except Exception:
-                    pass
-            elif cookies:
-                try:
-                    gdl_config.set(("extractor",), "cookies", cookies)
-                except Exception:
-                    pass
-
+        with _gdl_lock, _temporary_gallery_dl_config(
+            user_agent or "EmreGallery/1.0 (Android)", cookies, url
+        ):
             target_dir = os.path.dirname(target_path)
             target_filename = os.path.basename(target_path)
             os.makedirs(target_dir, exist_ok=True)
@@ -876,7 +862,7 @@ def download_media_file(media_url, target_path, referer=None, user_agent=None, c
         except Exception:
             pass
 
-    ua = user_agent or "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    ua = user_agent or "EmreGallery/1.0 (Android)"
 
     # 1. Primary: yt-dlp
     if is_ytdlp_supported(media_url) or (referer and is_ytdlp_supported(referer)):

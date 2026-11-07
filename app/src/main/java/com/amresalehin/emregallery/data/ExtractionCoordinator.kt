@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.net.URL
 
 /**
@@ -145,10 +144,6 @@ class ExtractionCoordinator(private val context: Context) {
                 // Step 2: Inconclusive / Not direct media -> Concurrent Multi-Engine Discovery
                 updateStatus("Initiating concurrent discovery (yt-dlp, gallery-dl, Browser Session)...", ExtractionPhase.YT_DLP)
 
-                val supportInfo = withContext(Dispatchers.IO) {
-                    GalleryDlEngine.checkSupport(requestContext.url)
-                }
-
                 val cookies = OkHttpDownloader.sharedCookieJar.getCookieString(requestContext.url).takeIf { it.isNotBlank() }
                 val options = GalleryDlOptions(cookies = cookies)
 
@@ -209,69 +204,28 @@ class ExtractionCoordinator(private val context: Context) {
                 galleryDlJob.join()
                 browserJob.join()
 
-                // Check bot challenges or login requirement if candidates are still empty
-                val needsSignInDirect = BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError)
-                val isSupportedByEngines = supportInfo.isSupported
-                val needsCookiesOrBot = BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError) ||
-                        (isSupportedByEngines && itemsMap.isEmpty() && cookies.isNullOrBlank())
-
-                if (needsSignInDirect && itemsMap.isEmpty()) {
+                // Stop when a site requires sign-in, CAPTCHA, bot verification, or rate-limit recovery.
+                // Existing user-session cookies may be used, but discovery never opens a hidden
+                // browser to acquire new cookies or retries an access challenge automatically.
+                if (itemsMap.isEmpty() && BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError)) {
                     _state.value = _state.value.copy(
                         isRunning = false,
                         requiresSignIn = true,
                         signInUrl = requestContext.url,
                         statusMessage = "Sign-in required for $domain",
-                        errorMessage = "Sign in to $domain to access and download this media."
+                        errorMessage = "Authentication required. Open the original page in the browser and sign in manually."
                     )
                     return@launch
-                } else if (needsCookiesOrBot && itemsMap.isEmpty()) {
-                    updateStatus("Resolving session cookies in background for $domain...", ExtractionPhase.YT_DLP)
-                    _state.value = _state.value.copy(isObtainingCookiesInBackground = true)
-
-                    val cookieRes = withContext(Dispatchers.Main) {
-                        BrowserSession.fetchCookiesInBackground(
-                            context = context,
-                            targetUrl = requestContext.url,
-                            onStatusUpdate = { s -> launch { updateStatus(s) } }
-                        )
-                    }
-                    _state.value = _state.value.copy(isObtainingCookiesInBackground = false)
-
-                    if (cookieRes.requiresSignIn) {
-                        _state.value = _state.value.copy(
-                            isRunning = false,
-                            requiresSignIn = true,
-                            signInUrl = cookieRes.signInUrl ?: requestContext.url,
-                            statusMessage = "Sign-in required for $domain",
-                            errorMessage = "Sign in to $domain to access and download this media."
-                        )
-                        return@launch
-                    } else if (!cookieRes.cookies.isNullOrBlank()) {
-                        val updatedOptions = options.copy(cookies = cookieRes.cookies)
-                        updateStatus("Cookies refreshed. Re-probing with yt-dlp & gallery-dl...", ExtractionPhase.YT_DLP)
-
-                        val retryYt = withContext(Dispatchers.IO) {
-                            try {
-                                GalleryDlEngine.extractYtDlp(requestContext.url, updatedOptions)
-                            } catch (e: Exception) {
-                                GalleryDlExtractResult(success = false, errorMessage = e.localizedMessage)
-                            }
-                        }
-                        if (retryYt.success && retryYt.items.isNotEmpty()) {
-                            updateItems(retryYt.items, title = retryYt.pageTitle)
-                        }
-
-                        val retryGdl = withContext(Dispatchers.IO) {
-                            try {
-                                GalleryDlEngine.extractGalleryDl(requestContext.url, updatedOptions)
-                            } catch (e: Exception) {
-                                GalleryDlExtractResult(success = false, errorMessage = e.localizedMessage)
-                            }
-                        }
-                        if (retryGdl.success && retryGdl.items.isNotEmpty()) {
-                            updateItems(retryGdl.items, title = retryGdl.pageTitle)
-                        }
-                    }
+                }
+                if (itemsMap.isEmpty() && BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError)) {
+                    val message = "The site requires authentication, bot verification, or rate-limit recovery. Open the original page in the browser; automatic discovery will not retry or bypass the access check."
+                    _state.value = _state.value.copy(
+                        isRunning = false,
+                        phase = ExtractionPhase.ERROR,
+                        statusMessage = message,
+                        errorMessage = message
+                    )
+                    return@launch
                 }
 
                 // Evaluate merged discovery results

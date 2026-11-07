@@ -331,7 +331,7 @@ object MediaCaptureEngine {
 
     /**
      * Builds and validates a ScrapedMediaItem with provenance, clean titles,
-     * download headers (User-Agent, Referer, Cookie), and thumbnail classification.
+     * non-sensitive download hints, and thumbnail classification.
      */
     fun buildMediaItem(
         rawUrl: String,
@@ -380,13 +380,11 @@ object MediaCaptureEngine {
 
         val thumb = resolvedInfo.thumbnailUrl ?: poster ?: if (classification.category == MediaCategory.IMAGES) resolved else poster
 
+        // The request CookieJar supplies the user's current session at download time.
+        // Never copy cookie values into candidate state or WorkManager input data.
         val headers = mutableMapOf<String, String>()
         headers["Referer"] = baseUrl
         headers["User-Agent"] = OkHttpDownloader.DEFAULT_USER_AGENT
-        val cookieStr = OkHttpDownloader.sharedCookieJar.getCookieString(baseUrl)
-        if (cookieStr.isNotBlank()) {
-            headers["Cookie"] = cookieStr
-        }
 
         val metadataMap = mutableMapOf<String, String>()
         resolutionHint?.let { metadataMap["resolution"] = it }

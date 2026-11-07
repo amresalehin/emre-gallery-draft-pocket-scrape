@@ -51,6 +51,9 @@ jobs:
           python --version
           python3.10 --version
 
+      - name: Validate Python extractor syntax
+        run: python -m py_compile app/src/main/python/gallery_dl_runner.py
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 

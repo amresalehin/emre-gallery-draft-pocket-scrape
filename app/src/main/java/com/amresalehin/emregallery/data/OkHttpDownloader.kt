@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit
 object OkHttpDownloader {
 
     private const val TAG = "OkHttpDownloader"
-    const val DEFAULT_USER_AGENT = BotDetectionMitigator.STEALTH_USER_AGENT
+    const val DEFAULT_USER_AGENT = "EmreGallery/1.0 (Android)"
 
     /**
      * Shared bidirectional CookieJar bridging Android WebView CookieManager and in-memory cache.

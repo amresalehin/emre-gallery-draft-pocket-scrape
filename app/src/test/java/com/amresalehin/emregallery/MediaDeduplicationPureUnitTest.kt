@@ -663,19 +663,28 @@ class MediaDeduplicationPureUnitTest {
     }
 
     @Test
-    fun testStealthUserAgentAndHeadersFormat() {
-        val ua = com.amresalehin.emregallery.data.BotDetectionMitigator.STEALTH_USER_AGENT
-        assertTrue(ua.contains("Chrome/"))
-        assertTrue(ua.contains("Mobile Safari"))
-        assertTrue(ua.contains("Android"))
+    fun testAccessRestrictionsAreReportedForManualUserAction() {
+        val guard = com.amresalehin.emregallery.data.BotDetectionMitigator
 
-        val headers = com.amresalehin.emregallery.data.BotDetectionMitigator.STEALTH_HEADERS
-        assertTrue(headers.containsKey("Sec-Ch-Ua"))
-        assertTrue(headers.containsKey("Sec-Ch-Ua-Mobile"))
-        assertTrue(headers.containsKey("Sec-Ch-Ua-Platform"))
-        assertEquals("?1", headers["Sec-Ch-Ua-Mobile"])
-        assertEquals("\"Android\"", headers["Sec-Ch-Ua-Platform"])
+        assertTrue(guard.isSignInPage("https://example.com/login", "Example"))
+        assertTrue(guard.indicatesSignInRequired("Authentication required"))
+        assertTrue(guard.indicatesCookiesOrBotVerificationNeeded("HTTP Error 403: Cloudflare challenge"))
+        assertTrue(guard.indicatesCookiesOrBotVerificationNeeded("HTTP Error 429: Too many requests"))
+        assertFalse(guard.indicatesCookiesOrBotVerificationNeeded("No media items discovered"))
+
+        assertTrue(
+            guard.accessRestrictionMessage("Sign in to continue", "https://example.com/login")
+                ?.contains("sign in manually") == true
+        )
+        assertTrue(
+            guard.accessRestrictionMessage("Just a moment...", "https://example.com")
+                ?.contains("complete verification manually") == true
+        )
+        assertEquals(null, guard.accessRestrictionMessage("Article", "https://example.com/article"))
+        assertFalse(guard.isBotChallenge("Please wait while the article loads", "https://example.com/article"))
+        assertFalse(guard.isSignInPage("https://example.com/article", "Welcome back"))
     }
+
 }
 
 

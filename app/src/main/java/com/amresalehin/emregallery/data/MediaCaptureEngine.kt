@@ -125,9 +125,8 @@ object MediaCaptureEngine {
                     }
                     if (chosenVideo) {
                         list.push({u: chosenVideo, s: 'DOM', p: poster, r: 'video'});
-                    } else if (poster) {
-                        list.push({u: poster, s: 'POSTER', r: 'poster'});
                     }
+                    // A poster without a media source is presentation metadata, not content media.
                 }
 
                 // 3. Audio Elements
@@ -164,14 +163,8 @@ object MediaCaptureEngine {
                                 var cu = resolveAbs(item.contentUrl);
                                 if (cu) list.push({u: cu, s: 'DOM', r: 'json-ld'});
                             }
-                            if (item.thumbnailUrl) {
-                                var tu = resolveAbs(item.thumbnailUrl);
-                                if (tu) list.push({u: tu, s: 'DOM', r: 'json-ld-thumb'});
-                            }
-                            if (item.image && typeof item.image === 'string') {
-                                var iu = resolveAbs(item.image);
-                                if (iu) list.push({u: iu, s: 'DOM', r: 'json-ld-image'});
-                            }
+                            // thumbnailUrl and image are page-preview signals. PagePreviewResolver
+                            // owns them; only contentUrl is eligible for media discovery.
                         }
                     } catch(e) {}
                 }
@@ -258,7 +251,7 @@ object MediaCaptureEngine {
                                 }
                             }
                         }
-                        report(node.getAttribute('poster'));
+                        // A video poster is a preview, not an independently playable media asset.
                     } else if (tag === 'AUDIO') {
                         if (node.src && node.src.indexOf('blob:') !== 0 && node.src.indexOf('data:') !== 0) {
                             report(node.src);
@@ -305,7 +298,7 @@ object MediaCaptureEngine {
                     childList: true,
                     subtree: true,
                     attributes: true,
-                    attributeFilter: ['src', 'data-src', 'data-original', 'data-lazy-src', 'srcset', 'data-srcset', 'poster']
+                    attributeFilter: ['src', 'data-src', 'data-original', 'data-lazy-src', 'srcset', 'data-srcset']
                 });
             })();
         """.trimIndent()
@@ -436,6 +429,18 @@ object MediaCaptureEngine {
     }
 
     /**
+     * An image subresource request alone cannot distinguish content from posters, avatars, or UI.
+     * Image candidates come from the content-aware DOM scan; only a top-level image document is
+     * accepted from network interception. Video/audio requests remain discoverable from the network.
+     */
+    internal fun shouldCaptureNetworkCandidate(
+        isVideo: Boolean,
+        isAudio: Boolean,
+        isImage: Boolean,
+        isMainFrame: Boolean
+    ): Boolean = isVideo || isAudio || (isImage && isMainFrame)
+
+    /**
      * Unified network request interception for both BrowserMediaExtractor and DirectBrowserView.
      */
     fun shouldInterceptRequest(
@@ -504,7 +509,7 @@ object MediaCaptureEngine {
 
         val isImage = hasImageExt && !acceptHeader.contains("text/html")
 
-        if (isVideo || isAudio || isImage) {
+        if (shouldCaptureNetworkCandidate(isVideo, isAudio, isImage, request.isForMainFrame)) {
             val cleanReqUrl = if (isVideo) MediaClassifier.cleanMediaUrl(reqUrl) else reqUrl
             val ytPoster = if (isVideo) {
                 MediaClassifier.extractYouTubeVideoId(baseUrl)?.let { ytId ->
@@ -549,6 +554,14 @@ object MediaCaptureEngine {
                 val rawUrl = obj.optString("u", "")
                 if (rawUrl.isNotBlank()) {
                     val sTag = obj.optString("s", "DOM")
+                    val res = obj.optString("r", "").ifBlank { null }
+                    val role = res?.lowercase(java.util.Locale.ROOT)
+                    if (sTag.equals("POSTER", ignoreCase = true) ||
+                        role in setOf("poster", "thumbnail", "preview", "json-ld-thumb", "json-ld-image")
+                    ) {
+                        // Defensive compatibility guard for scans produced by older injected scripts.
+                        continue
+                    }
                     val source = when (sTag) {
                         "CSS" -> ExtractionSource.CSS_BACKGROUND
                         "SRCSET" -> ExtractionSource.SRCSET
@@ -556,13 +569,15 @@ object MediaCaptureEngine {
                         else -> ExtractionSource.DOM_SCRAPE
                     }
                     val poster = obj.optString("p", "").ifBlank { null }
-                    val res = obj.optString("r", "").ifBlank { null }
+                    val resolutionHint = res?.takeIf {
+                        Regex("""(?i)(?:\d+(?:\.\d+)?x|\d+w)""").matches(it)
+                    }
                     val item = buildMediaItem(
                         rawUrl = rawUrl,
                         source = source,
                         baseUrl = baseUrl,
                         poster = poster,
-                        resolutionHint = res,
+                        resolutionHint = resolutionHint,
                         indexHint = i
                     )
                     if (item != null) {

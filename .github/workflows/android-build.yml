@@ -3,12 +3,14 @@ name: Android build
 on:
   push:
     branches:
+      - main
       - Develop
       - 'integration/**'
       - 'fix/**'
       - 'chore/**'
   pull_request:
     branches:
+      - main
       - Develop
       - 'integration/**'
       - 'fix/**'

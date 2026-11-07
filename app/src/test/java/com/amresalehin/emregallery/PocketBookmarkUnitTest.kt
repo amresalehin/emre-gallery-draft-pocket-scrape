@@ -1,5 +1,6 @@
 package com.amresalehin.emregallery
 
+import com.amresalehin.emregallery.data.BookmarkUrlIdentity
 import com.amresalehin.emregallery.data.MediaClassifier
 import com.amresalehin.emregallery.data.MediaInboxItem
 import com.amresalehin.emregallery.data.MediaInboxStack
@@ -241,5 +242,69 @@ class PocketBookmarkUnitTest {
         val faviconUrl = "https://www.google.com/s2/favicons?domain=${stack.sourceDomain}&sz=128"
         assertTrue(faviconUrl.contains("britannica.com"))
     }
+
+    @Test
+    fun canonicalBookmarkIdentityNormalizesSafeUrlComponents() {
+        assertEquals(
+            "https://example.com/",
+            BookmarkUrlIdentity.canonicalKey(" HTTPS://EXAMPLE.COM:443 ")
+        )
+        assertEquals(
+            "http://example.com/article",
+            BookmarkUrlIdentity.canonicalKey("HTTP://Example.Com:80/article")
+        )
+        assertEquals(
+            "https://example.com/b?x=1",
+            BookmarkUrlIdentity.canonicalKey("https://example.com/a/../b?x=1")
+        )
+    }
+
+    @Test
+    fun canonicalBookmarkIdentityPreservesQueryAndFragment() {
+        val savedUrl = "HTTPS://EXAMPLE.COM:443/article?utm_source=mail&id=7#comments"
+
+        assertEquals(
+            "https://example.com/article?utm_source=mail&id=7#comments",
+            BookmarkUrlIdentity.canonicalKey(savedUrl)
+        )
+        assertFalse(
+            BookmarkUrlIdentity.areSameSource(
+                "https://example.com/article?id=7",
+                "https://example.com/article?id=8"
+            )
+        )
+        assertFalse(
+            BookmarkUrlIdentity.areSameSource(
+                "https://example.com/article#intro",
+                "https://example.com/article#comments"
+            )
+        )
+    }
+
+    @Test
+    fun equivalentBookmarkSourcesMatchWithoutMergingBlankSources() {
+        assertTrue(
+            BookmarkUrlIdentity.areSameSource(
+                "https://EXAMPLE.com:443/article",
+                "https://example.com/article"
+            )
+        )
+        assertTrue(
+            BookmarkUrlIdentity.areSameSource(
+                "https://example.com",
+                "https://example.com/"
+            )
+        )
+        assertFalse(BookmarkUrlIdentity.areSameSource("", ""))
+        assertFalse(BookmarkUrlIdentity.areSameSource(" ", "https://example.com"))
+    }
+
+    @Test
+    fun canonicalBookmarkIdentityRejectsUnsupportedOrMalformedUrls() {
+        assertEquals(null, BookmarkUrlIdentity.canonicalKey("ftp://example.com/file"))
+        assertEquals(null, BookmarkUrlIdentity.canonicalKey("/relative/path"))
+        assertEquals(null, BookmarkUrlIdentity.canonicalKey("https://exa mple.com"))
+    }
+
 }
 

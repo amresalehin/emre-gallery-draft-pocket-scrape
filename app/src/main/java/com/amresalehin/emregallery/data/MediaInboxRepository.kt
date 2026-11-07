@@ -109,11 +109,8 @@ class MediaInboxRepository(private val context: Context) {
         val merged = mutableListOf<MediaInboxStack>()
         for (stack in rawList) {
             val existingIndex = merged.indexOfFirst { existing ->
-                when {
-                    existing.id == stack.id -> true
-                    existing.sourceUrl.isNotBlank() && stack.sourceUrl.isNotBlank() && existing.sourceUrl == stack.sourceUrl -> true
-                    else -> false
-                }
+                existing.id == stack.id ||
+                    BookmarkUrlIdentity.areSameSource(existing.sourceUrl, stack.sourceUrl)
             }
             if (existingIndex >= 0) {
                 val existing = merged[existingIndex]
@@ -183,6 +180,15 @@ class MediaInboxRepository(private val context: Context) {
         description: String = ""
     ): MediaInboxStack {
         val cleanUrl = url.trim()
+
+        // Re-saving an equivalent source returns the existing durable bookmark.
+        // Keep its original URL and user-edited metadata instead of creating a duplicate.
+        if (cleanUrl.isNotBlank()) {
+            _stacks.value.firstOrNull {
+                BookmarkUrlIdentity.areSameSource(it.sourceUrl, cleanUrl)
+            }?.let { return it }
+        }
+
         val cleanDomain = domain.ifBlank { MediaClassifier.cleanDomainFromUrl(cleanUrl) }
         val bookmarkStack = MediaInboxStack(
             id = "bookmark_${System.currentTimeMillis()}",

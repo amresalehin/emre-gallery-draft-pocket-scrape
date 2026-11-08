@@ -61,6 +61,7 @@ class OkHttpDirectMediaProbeTest {
             MockResponse()
                 .setResponseCode(200)
                 .setHeader("Content-Type", "application/octet-stream")
+                .setHeader("Content-Length", "4096")
                 .setHeader("Content-Disposition", "attachment; filename*=UTF-8''clip%20final.mp4")
         )
 

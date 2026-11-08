@@ -18,9 +18,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.net.Proxy
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 
 /**
  * Shared session HTTP client and high-performance streaming downloader powered by OkHttp.
@@ -162,6 +164,25 @@ object OkHttpDownloader {
             .build()
     }
 
+    /**
+     * Candidate verification is isolated from the browser/download session:
+     * no cookies, no proxy, no automatic redirects, and public-address DNS enforcement.
+     */
+    private val publicMediaProbeClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .cookieJar(CookieJar.NO_COOKIES)
+            .dns(PublicInternetDns())
+            .proxy(Proxy.NO_PROXY)
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .writeTimeout(3, TimeUnit.SECONDS)
+            .callTimeout(4, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+    }
+
     data class HttpResponse(
         val isSuccessful: Boolean,
         val statusCode: Int,
@@ -207,8 +228,12 @@ object OkHttpDownloader {
                     statusCode == 403 -> MediaVerificationState.ACCESS_RESTRICTED
                     statusCode == 429 -> MediaVerificationState.RATE_LIMITED
                     statusCode == 410 -> MediaVerificationState.EXPIRED
-                    normalizedContentType == "text/html" ||
-                        normalizedContentType == "application/xhtml+xml" ->
+                    statusCode in 300..399 -> MediaVerificationState.BROWSER_ONLY
+                    normalizedContentType?.startsWith("text/") == true ||
+                        normalizedContentType == "application/xhtml+xml" ||
+                        normalizedContentType == "application/xml" ||
+                        normalizedContentType == "application/json" ||
+                        normalizedContentType?.endsWith("+json") == true ->
                         MediaVerificationState.BROWSER_ONLY
                     else -> MediaVerificationState.NEEDS_VERIFICATION
                 }
@@ -216,68 +241,53 @@ object OkHttpDownloader {
     }
 
     /**
-     * Probes an arbitrary URL using OkHttp (HEAD request with fast Range GET fallback)
-     * to verify if the URL points directly to an image, video, audio or binary stream.
+     * Session-aware probe for a trusted, user-originated URL. It can use the shared cookie jar
+     * and follow redirects; discovered candidates must use [probeDiscoveredMedia] instead.
      */
     suspend fun probeDirectMedia(
         url: String,
         referer: String? = null
+    ): DirectMediaProbeResult = probeMediaUrl(url, client, referer)
+
+    /**
+     * Verifies a discovered candidate without inheriting browser cookies or following redirects.
+     * Unsafe/private destinations are rejected before DNS or network access.
+     */
+    suspend fun probeDiscoveredMedia(url: String): DirectMediaProbeResult {
+        val allowedUrl = PageFetchUrlPolicy.parseAllowedUrl(url)
+            ?: return DirectMediaProbeResult(
+                isConfirmedDirectMedia = false,
+                finalUrl = url,
+                contentType = null,
+                contentDisposition = null,
+                contentLength = null,
+                statusCode = -1
+            )
+        return probeMediaUrl(allowedUrl.toString(), publicMediaProbeClient, referer = null)
+    }
+
+    private suspend fun probeMediaUrl(
+        url: String,
+        probeClient: OkHttpClient,
+        referer: String?
     ): DirectMediaProbeResult = withContext(Dispatchers.IO) {
         try {
             val headReq = Request.Builder()
                 .url(url)
+                .header("User-Agent", DEFAULT_USER_AGENT)
                 .head()
                 .apply {
                     if (!referer.isNullOrBlank()) header("Referer", referer)
                 }
                 .build()
 
-            val headResponse = runCatching { client.newCall(headReq).execute() }.getOrNull()
-            if (headResponse != null) {
-                val headResult = headResponse.use { response ->
-                    val contentType = response.header("Content-Type")?.lowercase(Locale.ROOT)
-                    val contentDisposition = response.header("Content-Disposition")
-                    DirectMediaProbeResult(
-                        isConfirmedDirectMedia = isConfirmedMediaResponse(
-                            response.code,
-                            contentType,
-                            contentDisposition
-                        ),
-                        finalUrl = response.request.url.toString(),
-                        contentType = contentType,
-                        contentDisposition = contentDisposition,
-                        contentLength = response.header("Content-Length")?.toLongOrNull(),
-                        statusCode = response.code
-                    )
-                }
-
-                // Do not retry access-denied, rate-limited, expired, or HTML responses with Range.
-                // Those outcomes are meaningful browser/access states, not inconclusive media probes.
-                if (
-                    headResult.isConfirmedDirectMedia ||
-                    headResult.statusCode in setOf(401, 403, 410, 429) ||
-                    isHtmlDocumentContentType(headResult.contentType)
-                ) {
-                    return@withContext headResult
-                }
-            }
-
-            // A bounded Range request is used only when HEAD is unsupported or inconclusive.
-            // A server that ignores Range and answers 200 is not treated as verified.
-            val rangeReq = Request.Builder()
-                .url(url)
-                .header("Range", "bytes=0-1024")
-                .apply {
-                    if (!referer.isNullOrBlank()) header("Referer", referer)
-                }
-                .build()
-
-            client.newCall(rangeReq).execute().use { response ->
+            val headResult = probeClient.newCall(headReq).execute().use { response ->
                 val contentType = response.header("Content-Type")?.lowercase(Locale.ROOT)
                 val contentDisposition = response.header("Content-Disposition")
+                val contentLength = response.header("Content-Length")?.toLongOrNull()
                 DirectMediaProbeResult(
-                    isConfirmedDirectMedia = response.code == 206 &&
-                        hasBoundedContentRange(response.header("Content-Range")) &&
+                    isConfirmedDirectMedia = response.code == 200 &&
+                        contentLength != 0L &&
                         isConfirmedMediaResponse(
                             response.code,
                             contentType,
@@ -286,10 +296,53 @@ object OkHttpDownloader {
                     finalUrl = response.request.url.toString(),
                     contentType = contentType,
                     contentDisposition = contentDisposition,
-                    contentLength = response.header("Content-Length")?.toLongOrNull(),
+                    contentLength = contentLength,
                     statusCode = response.code
                 )
             }
+
+            val headStatus = headResult.statusCode
+            val terminalHeadResult = headResult.isConfirmedDirectMedia ||
+                headStatus in 300..399 ||
+                headStatus in setOf(401, 403, 404, 410, 429) ||
+                isNonMediaDocumentContentType(headResult.contentType) ||
+                (headStatus !in 200..299 && headStatus !in setOf(405, 501))
+            if (terminalHeadResult) {
+                return@withContext headResult
+            }
+
+            // Range is a bounded fallback only for unsupported or inconclusive HEAD responses.
+            // Redirects and access errors are returned to the source-page/browser path, not followed.
+            val rangeReq = Request.Builder()
+                .url(url)
+                .header("User-Agent", DEFAULT_USER_AGENT)
+                .header("Range", "bytes=0-1024")
+                .apply {
+                    if (!referer.isNullOrBlank()) header("Referer", referer)
+                }
+                .build()
+
+            probeClient.newCall(rangeReq).execute().use { response ->
+                val contentType = response.header("Content-Type")?.lowercase(Locale.ROOT)
+                val contentDisposition = response.header("Content-Disposition")
+                val contentLength = response.header("Content-Length")?.toLongOrNull()
+                DirectMediaProbeResult(
+                    isConfirmedDirectMedia = response.code == 206 &&
+                        hasBoundedContentRange(response.header("Content-Range"), contentLength) &&
+                        isConfirmedMediaResponse(
+                            response.code,
+                            contentType,
+                            contentDisposition
+                        ),
+                    finalUrl = response.request.url.toString(),
+                    contentType = contentType,
+                    contentDisposition = contentDisposition,
+                    contentLength = contentLength,
+                    statusCode = response.code
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             DirectMediaProbeResult(
                 isConfirmedDirectMedia = false,
@@ -359,18 +412,16 @@ object OkHttpDownloader {
     private val BOUNDED_CONTENT_RANGE_PATTERN =
         Regex("(?i)^bytes\\s+0-(\\d+)/(\\d+|\\*)$")
 
-    private fun hasBoundedContentRange(contentRange: String?): Boolean {
+    private fun hasBoundedContentRange(
+        contentRange: String?,
+        contentLength: Long?
+    ): Boolean {
         val match = contentRange?.trim()?.let(BOUNDED_CONTENT_RANGE_PATTERN::matchEntire)
             ?: return false
         val lastByte = match.groupValues[1].toLongOrNull() ?: return false
         val totalBytes = match.groupValues[2].toLongOrNull()
-        return lastByte <= 1024L && (totalBytes == null || totalBytes > lastByte)
-    }
-
-    private fun isHtmlDocumentContentType(contentType: String?): Boolean {
-        if (contentType.isNullOrBlank()) return false
-        val clean = contentType.substringBefore(";").trim().lowercase(Locale.ROOT)
-        return clean == "text/html" || clean == "application/xhtml+xml"
+        if (lastByte > 1024L || (totalBytes != null && totalBytes <= lastByte)) return false
+        return contentLength == null || contentLength == lastByte + 1L
     }
 
     private fun hasMediaContentDisposition(contentDisposition: String?): Boolean {

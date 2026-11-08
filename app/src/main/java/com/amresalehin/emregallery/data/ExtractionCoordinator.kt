@@ -45,6 +45,8 @@ class ExtractionCoordinator(private val context: Context) {
     private val _state = MutableStateFlow(ExtractionState())
     val state: StateFlow<ExtractionState> = _state.asStateFlow()
 
+    private val mediaDiscoveryCoordinator = MediaDiscoveryCoordinator()
+
     fun extract(targetUrl: String, scope: CoroutineScope, directOnly: Boolean = false) {
         cancel()
 
@@ -107,7 +109,7 @@ class ExtractionCoordinator(private val context: Context) {
             try {
                 // Step 1: OkHttp Direct-Media Fast Path Probe
                 updateStatus("Probing URL headers with OkHttp...", ExtractionPhase.DIRECT_MEDIA)
-                val directProbe = OkHttpDownloader.probeDirectMedia(requestContext.url)
+                val directProbe = OkHttpDownloader.probeDiscoveredMedia(requestContext.url)
                 itemsMutex.withLock {
                     _state.value = _state.value.copy(directProbeState = directProbe.verificationState)
                 }
@@ -238,8 +240,43 @@ class ExtractionCoordinator(private val context: Context) {
                     return@launch
                 }
 
-                // Evaluate merged discovery results
+                // Verify discovered candidates independently from the legacy extraction items.
+                // If any engine reports an access challenge, preserve candidates as unverified and
+                // leave recovery to the user's original browser session.
                 if (itemsMap.isNotEmpty()) {
+                    val directProbeAccessBlocked = directProbe.verificationState in setOf(
+                        MediaVerificationState.AUTH_REQUIRED,
+                        MediaVerificationState.ACCESS_RESTRICTED,
+                        MediaVerificationState.RATE_LIMITED
+                    )
+                    val accessChallengeReported = directProbeAccessBlocked ||
+                        BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError) ||
+                        BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError)
+                    if (!accessChallengeReported) {
+                        updateStatus("Verifying discovered media candidates...")
+                        val discoveryResult = try {
+                            mediaDiscoveryCoordinator.discover(
+                                items = itemsMap.values.toList(),
+                                sourcePageUrl = requestContext.url
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            Log.w(
+                                "ExtractionCoordinator",
+                                "Candidate verification failed; retaining unverified discovery state",
+                                error
+                            )
+                            null
+                        }
+                        if (discoveryResult != null) {
+                            itemsMutex.withLock {
+                                _state.value = _state.value.copy(
+                                    discoveryCandidates = discoveryResult.candidates
+                                )
+                            }
+                        }
+                    }
                     finishSuccess(itemsMap.size)
                     return@launch
                 }

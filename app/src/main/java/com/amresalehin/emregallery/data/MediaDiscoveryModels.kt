@@ -82,7 +82,11 @@ data class MediaDiscoveryCandidate(
 ) {
     companion object {
         fun from(item: ScrapedMediaItem): MediaDiscoveryCandidate {
-            val role = when {
+            val explicitRole = item.metadata["asset_role"]
+                ?.trim()
+                ?.uppercase(java.util.Locale.ROOT)
+                ?.let { value -> runCatching { MediaAssetRole.valueOf(value) }.getOrNull() }
+            val role = explicitRole ?: when {
                 item.isAudio -> MediaAssetRole.CONTENT_AUDIO
                 item.isVideo || item.isStream -> MediaAssetRole.CONTENT_VIDEO
                 item.category == MediaCategory.IMAGES -> MediaAssetRole.CONTENT_IMAGE
@@ -214,6 +218,7 @@ object MediaDiscoveryPolicy {
             MediaVerificationState.ACCESS_RESTRICTED,
             MediaVerificationState.RATE_LIMITED,
             MediaVerificationState.EXPIRED,
-            MediaVerificationState.UNSUPPORTED
+            MediaVerificationState.UNSUPPORTED,
+            MediaVerificationState.REJECTED
         )
 }

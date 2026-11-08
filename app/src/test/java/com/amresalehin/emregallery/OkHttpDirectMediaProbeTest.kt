@@ -181,6 +181,74 @@ class OkHttpDirectMediaProbeTest {
     }
 
     @Test
+    fun emptyMediaHeadDoesNotVerifyAnEmptyResource() = withServer { server ->
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "image/jpeg")
+                .setHeader("Content-Length", "0")
+        )
+        server.enqueue(MockResponse().setResponseCode(416))
+
+        val result = OkHttpDownloader.probeDirectMedia(server.url("/empty.jpg").toString())
+
+        assertFalse(result.isConfirmedDirectMedia)
+        assertEquals(MediaVerificationState.NEEDS_VERIFICATION, result.verificationState)
+        assertEquals(416, result.statusCode)
+    }
+
+    @Test
+    fun redirectsAndTextDocumentsStayBrowserOnlyWithoutRangeRetry() = withServer { server ->
+        server.enqueue(MockResponse().setResponseCode(302))
+
+        val redirect = OkHttpDownloader.probeDirectMedia(server.url("/asset.mp4").toString())
+
+        assertFalse(redirect.isConfirmedDirectMedia)
+        assertEquals(MediaVerificationState.BROWSER_ONLY, redirect.verificationState)
+        assertEquals(1, server.requestCount)
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/plain")
+                .setBody("Sign in to continue")
+        )
+
+        val textDocument = OkHttpDownloader.probeDirectMedia(server.url("/asset.mp4").toString())
+
+        assertFalse(textDocument.isConfirmedDirectMedia)
+        assertEquals(MediaVerificationState.BROWSER_ONLY, textDocument.verificationState)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun rangeResponseLengthMustMatchItsDeclaredByteRange() = withServer { server ->
+        server.enqueue(MockResponse().setResponseCode(405))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(206)
+                .setHeader("Content-Type", "video/mp4")
+                .setHeader("Content-Range", "bytes 0-1024/4096")
+                .setBody("x".repeat(10))
+        )
+
+        val result = OkHttpDownloader.probeDirectMedia(server.url("/mismatched-range").toString())
+
+        assertFalse(result.isConfirmedDirectMedia)
+        assertEquals(MediaVerificationState.NEEDS_VERIFICATION, result.verificationState)
+        assertEquals(206, result.statusCode)
+    }
+
+    @Test
+    fun discoveredProbeRejectsLoopbackBeforeOpeningAConnection() = runBlocking {
+        val result = OkHttpDownloader.probeDiscoveredMedia("http://127.0.0.1:8080/video.mp4")
+
+        assertFalse(result.isConfirmedDirectMedia)
+        assertEquals(-1, result.statusCode)
+        assertEquals(MediaVerificationState.NEEDS_VERIFICATION, result.verificationState)
+    }
+
+    @Test
     fun accessStatesRemainSourcePageFallbacksAndNeverBecomeGalleryAssets() {
         val base = MediaDiscoveryCandidate.from(
             ScrapedMediaItem(
@@ -204,7 +272,8 @@ class OkHttpDirectMediaProbeTest {
             MediaVerificationState.AUTH_REQUIRED,
             MediaVerificationState.ACCESS_RESTRICTED,
             MediaVerificationState.RATE_LIMITED,
-            MediaVerificationState.EXPIRED
+            MediaVerificationState.EXPIRED,
+            MediaVerificationState.REJECTED
         ).forEach { state ->
             val candidate = base.copy(verificationState = state)
             assertTrue("$state should preserve source-page fallback", MediaDiscoveryPolicy.shouldOpenSourcePage(candidate))

@@ -381,7 +381,7 @@ private fun RemotePlaybackDialog(
                     AndroidView(
                         factory = { viewContext ->
                             PlayerView(viewContext).apply {
-                                player = activePlayer
+                                this.player = activePlayer
                                 useController = true
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                             }

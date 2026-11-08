@@ -42,7 +42,10 @@ class MediaDiscoveryCoordinator(
         val candidates = MediaNormalizer.deduplicate(items).map { item ->
             val candidate = MediaDiscoveryCandidate.from(item)
             if (!sourcePageUrl.isNullOrBlank()) {
-                candidate.copy(sourcePageUrl = sourcePageUrl)
+                val sourcePages = (
+                    listOf(sourcePageUrl) + candidate.sourcePageUrls + candidate.sourcePageUrl
+                ).filter { it.isNotBlank() }.distinct()
+                candidate.copy(sourcePageUrl = sourcePageUrl, sourcePageUrls = sourcePages)
             } else {
                 candidate
             }

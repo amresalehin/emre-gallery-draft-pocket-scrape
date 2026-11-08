@@ -1,7 +1,10 @@
 package com.amresalehin.emregallery
 
+import com.amresalehin.emregallery.data.MediaAssetRole
 import com.amresalehin.emregallery.data.MediaCategory
 import com.amresalehin.emregallery.data.MediaClassifier
+import com.amresalehin.emregallery.data.MediaDiscoveryCandidate
+import com.amresalehin.emregallery.data.MediaDiscoveryPolicy
 import com.amresalehin.emregallery.data.MediaProvenance
 import com.amresalehin.emregallery.data.ScrapedMediaItem
 import org.junit.Assert.assertEquals
@@ -683,6 +686,132 @@ class MediaDeduplicationPureUnitTest {
         assertEquals(null, guard.accessRestrictionMessage("Article", "https://example.com/article"))
         assertFalse(guard.isBotChallenge("Please wait while the article loads", "https://example.com/article"))
         assertFalse(guard.isSignInPage("https://example.com/article", "Welcome back"))
+    }
+
+
+    @Test
+    fun explicitPresentationRoleWinsAcrossDuplicateMergeRegardlessOfArrivalOrder() {
+        val url = "https://cdn.example.com/shared-image.jpg"
+        val untaggedContent = ScrapedMediaItem(
+            id = "content",
+            url = url,
+            title = "Shared image",
+            provenance = MediaProvenance(pageUrl = "https://example.com/gallery")
+        )
+        val avatar = untaggedContent.copy(
+            id = "avatar",
+            metadata = mapOf("asset_role" to MediaAssetRole.AVATAR.name),
+            provenance = MediaProvenance(pageUrl = "https://example.com/profile")
+        )
+
+        listOf(
+            MediaClassifier.deduplicateScrapedItems(listOf(untaggedContent, avatar)),
+            MediaClassifier.deduplicateScrapedItems(listOf(avatar, untaggedContent))
+        ).forEach { merged ->
+            val item = merged.single()
+            assertEquals(MediaAssetRole.AVATAR.name, item.metadata["asset_role"])
+            val candidate = MediaDiscoveryCandidate.from(item)
+            assertEquals(MediaAssetRole.AVATAR, candidate.role)
+            assertFalse(MediaDiscoveryPolicy.shouldOfferForManualDownload(candidate))
+        }
+    }
+
+    @Test
+    fun incompatibleExplicitContentRolesBecomeUnknownInsteadOfBeingPromoted() {
+        val url = "https://cdn.example.com/ambiguous-resource"
+        val image = ScrapedMediaItem(
+            id = "image",
+            url = url,
+            title = "Ambiguous",
+            metadata = mapOf("asset_role" to MediaAssetRole.CONTENT_IMAGE.name)
+        )
+        val video = image.copy(
+            id = "video",
+            isVideo = true,
+            category = MediaCategory.VIDEOS,
+            metadata = mapOf("asset_role" to MediaAssetRole.CONTENT_VIDEO.name)
+        )
+
+        val merged = MediaClassifier.deduplicateScrapedItems(listOf(image, video)).single()
+        assertEquals(MediaAssetRole.UNKNOWN.name, merged.metadata["asset_role"])
+        assertFalse(MediaDiscoveryPolicy.shouldOfferForManualDownload(MediaDiscoveryCandidate.from(merged)))
+    }
+
+    @Test
+    fun duplicateMergePreservesEverySourcePageAndDomSelector() {
+        val url = "https://cdn.example.com/photo.jpg"
+        val first = ScrapedMediaItem(
+            id = "first",
+            url = url,
+            title = "Photo",
+            source = "DOM",
+            provenance = MediaProvenance(
+                extractorEngine = "DOM Scrape",
+                pageUrl = "https://example.com/gallery/one",
+                domSelector = ".gallery img"
+            )
+        )
+        val second = first.copy(
+            id = "second",
+            source = "Network",
+            provenance = MediaProvenance(
+                extractorEngine = "Network Intercept",
+                pageUrl = "https://example.com/gallery/two",
+                domSelector = "#lazy-photo"
+            )
+        )
+
+        val merged = MediaClassifier.deduplicateScrapedItems(listOf(first, second)).single()
+        assertEquals("https://example.com/gallery/one", merged.provenance.pageUrl)
+        assertEquals(
+            listOf("https://example.com/gallery/one", "https://example.com/gallery/two"),
+            merged.provenance.sourcePageUrls
+        )
+        assertEquals(setOf(".gallery img", "#lazy-photo"), merged.provenance.domSelectors.toSet())
+        assertTrue(merged.provenance.extractorEngine.contains("DOM Scrape"))
+        assertTrue(merged.provenance.extractorEngine.contains("Network Intercept"))
+
+        val candidate = MediaDiscoveryCandidate.from(merged)
+        assertEquals("https://example.com/gallery/one", candidate.sourcePageUrl)
+        assertEquals(merged.provenance.sourcePageUrls, candidate.sourcePageUrls)
+    }
+
+    @Test
+    fun posterDuplicateEnrichesVideoThumbnailWithoutRemainingStandalone() {
+        val posterUrl = "https://cdn.example.com/video-poster.jpg"
+        val video = ScrapedMediaItem(
+            id = "video",
+            url = "https://cdn.example.com/video.mp4",
+            title = "Video",
+            isVideo = true,
+            category = MediaCategory.VIDEOS,
+            thumbnailUrl = posterUrl
+        )
+        val poster = ScrapedMediaItem(
+            id = "poster",
+            url = posterUrl,
+            title = "Poster",
+            metadata = mapOf("asset_role" to MediaAssetRole.VIDEO_POSTER.name)
+        )
+
+        val merged = MediaClassifier.deduplicateScrapedItems(listOf(video, poster))
+        assertEquals(1, merged.size)
+        assertEquals("video", merged.single().id)
+        assertEquals(posterUrl, merged.single().thumbnailUrl)
+    }
+
+    @Test
+    fun productImageRoleIsRetainedWhenMergedWithGenericContentImage() {
+        val item = ScrapedMediaItem(
+            id = "product",
+            url = "https://cdn.example.com/product.jpg",
+            title = "Product",
+            metadata = mapOf("asset_role" to MediaAssetRole.PRODUCT_IMAGE.name)
+        )
+        val generic = item.copy(id = "generic", metadata = mapOf("asset_role" to MediaAssetRole.CONTENT_IMAGE.name))
+
+        val merged = MediaClassifier.deduplicateScrapedItems(listOf(generic, item)).single()
+        assertEquals(MediaAssetRole.PRODUCT_IMAGE.name, merged.metadata["asset_role"])
     }
 
 }

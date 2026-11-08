@@ -272,4 +272,55 @@ class MediaDiscoveryModelsTest {
         metadata = metadata,
         downloadHeaders = downloadHeaders
     )
+
+    @Test
+    fun downloaderRemovesPreviouslySelectedItemWhenDuplicateIsReclassifiedAsAvatar() {
+        DownloaderSession.startSession("https://example.com/gallery")
+        val content = mediaItem(metadata = mapOf("asset_role" to MediaAssetRole.CONTENT_IMAGE.name))
+        DownloaderSession.addDiscoveredItem(content)
+
+        assertEquals(listOf(content.id), DownloaderSession.discoveredItems.value.map { it.id })
+        assertEquals(setOf(content.id), DownloaderSession.selectedItemIds.value)
+
+        val avatarUpdate = content.copy(
+            id = "later-avatar-observation",
+            metadata = mapOf("asset_role" to MediaAssetRole.AVATAR.name),
+            provenance = MediaProvenance(
+                extractorEngine = "MutationObserver",
+                pageUrl = "https://example.com/gallery"
+            )
+        )
+        DownloaderSession.addDiscoveredItem(avatarUpdate)
+
+        assertTrue(DownloaderSession.discoveredItems.value.isEmpty())
+        assertTrue(DownloaderSession.selectedItemIds.value.isEmpty())
+    }
+
+    @Test
+    fun unknownRoleIsNotOfferedForManualDownload() {
+        val unknown = MediaDiscoveryCandidate.from(mediaItem()).copy(role = MediaAssetRole.UNKNOWN)
+        assertFalse(MediaDiscoveryPolicy.shouldOfferForManualDownload(unknown))
+    }
+
+    @Test
+    fun removingSelectedCandidateDoesNotAutoSelectUnrelatedItems() {
+        DownloaderSession.startSession("https://example.com/gallery")
+        val selected = mediaItem(metadata = mapOf("asset_role" to MediaAssetRole.CONTENT_IMAGE.name))
+        val other = mediaItem().copy(
+            id = "other",
+            url = "https://cdn.example.com/other.jpg"
+        )
+        DownloaderSession.addDiscoveredItems(listOf(selected, other))
+        DownloaderSession.selectAll(setOf(selected.id))
+
+        val avatarUpdate = selected.copy(
+            id = "avatar-update",
+            metadata = mapOf("asset_role" to MediaAssetRole.AVATAR.name)
+        )
+        DownloaderSession.addDiscoveredItem(avatarUpdate)
+
+        assertEquals(listOf(other.id), DownloaderSession.discoveredItems.value.map { it.id })
+        assertTrue(DownloaderSession.selectedItemIds.value.isEmpty())
+    }
+
 }

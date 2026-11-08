@@ -131,6 +131,10 @@ class MediaDiscoveryCoordinatorTest {
         )
 
         assertEquals(sourcePageUrl, result.candidates.single().sourcePageUrl)
+        assertEquals(
+            listOf(sourcePageUrl, "https://cdn.example.com/embed-frame"),
+            result.candidates.single().sourcePageUrls
+        )
     }
 
     @Test

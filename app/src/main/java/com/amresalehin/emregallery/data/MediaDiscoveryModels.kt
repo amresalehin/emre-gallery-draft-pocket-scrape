@@ -78,14 +78,12 @@ data class MediaDiscoveryCandidate(
     val thumbnailUrl: String?,
     val role: MediaAssetRole,
     val verificationState: MediaVerificationState,
-    val evidence: List<MediaDiscoveryEvidence>
+    val evidence: List<MediaDiscoveryEvidence>,
+    val sourcePageUrls: List<String> = emptyList()
 ) {
     companion object {
         fun from(item: ScrapedMediaItem): MediaDiscoveryCandidate {
-            val explicitRole = item.metadata["asset_role"]
-                ?.trim()
-                ?.uppercase(java.util.Locale.ROOT)
-                ?.let { value -> runCatching { MediaAssetRole.valueOf(value) }.getOrNull() }
+            val explicitRole = MediaDiscoveryPolicy.roleHint(item.metadata)
             val role = explicitRole ?: when {
                 item.isAudio -> MediaAssetRole.CONTENT_AUDIO
                 item.isVideo || item.isStream -> MediaAssetRole.CONTENT_VIDEO
@@ -99,15 +97,22 @@ data class MediaDiscoveryCandidate(
                 MediaVerificationState.NEEDS_VERIFICATION
             }
 
+            val sourcePageUrls = (
+                item.provenance.sourcePageUrls + item.provenance.pageUrl
+            ).filter { it.isNotBlank() }.distinct()
+            val primarySourcePageUrl = item.provenance.pageUrl.takeIf { it.isNotBlank() }
+                ?: sourcePageUrls.firstOrNull().orEmpty()
+
             return MediaDiscoveryCandidate(
                 itemId = item.id,
                 resourceUrl = item.url,
-                sourcePageUrl = item.provenance.pageUrl,
+                sourcePageUrl = primarySourcePageUrl,
                 mediaType = item.category,
                 thumbnailUrl = item.thumbnailUrl,
                 role = role,
                 verificationState = state,
-                evidence = evidenceFor(item)
+                evidence = evidenceFor(item),
+                sourcePageUrls = sourcePageUrls
             )
         }
 
@@ -118,6 +123,9 @@ data class MediaDiscoveryCandidate(
         }
 
         private fun evidenceFor(item: ScrapedMediaItem): List<MediaDiscoveryEvidence> {
+            val selectors = (
+                item.provenance.domSelectors + listOfNotNull(item.provenance.domSelector)
+            ).filter { it.isNotBlank() }.distinct()
             val labels = (item.provenance.extractorEngine.split("+") + item.source)
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
@@ -147,10 +155,8 @@ data class MediaDiscoveryCandidate(
 
                 MediaDiscoveryEvidence(
                     source = source,
-                    detail = if (source == MediaDiscoveryEvidenceSource.DOM &&
-                        !item.provenance.domSelector.isNullOrBlank()
-                    ) {
-                        "$label: ${item.provenance.domSelector}"
+                    detail = if (source == MediaDiscoveryEvidenceSource.DOM && selectors.isNotEmpty()) {
+                        "$label: ${selectors.joinToString(", ")}"
                     } else {
                         label
                     },
@@ -226,8 +232,59 @@ object MediaDiscoveryPolicy {
      * This is not a verification or enqueue decision; weak content candidates still require
      * a separate user action before any download can start.
      */
+    private val manualDownloadRoles = setOf(
+        MediaAssetRole.CONTENT_IMAGE,
+        MediaAssetRole.PRODUCT_IMAGE,
+        MediaAssetRole.CONTENT_VIDEO,
+        MediaAssetRole.CONTENT_AUDIO,
+        MediaAssetRole.DOCUMENT_ATTACHMENT
+    )
+
+    /** Parse only recognized semantic role hints; invalid values remain unknown evidence. */
+    fun roleHint(metadata: Map<String, String>): MediaAssetRole? =
+        metadata["asset_role"]
+            ?.trim()
+            ?.uppercase(java.util.Locale.ROOT)
+            ?.let { value -> runCatching { MediaAssetRole.valueOf(value) }.getOrNull() }
+
+    fun isPresentationOnlyRole(role: MediaAssetRole): Boolean = role in presentationOnlyRoles
+
+    /**
+     * Merge explicit role hints conservatively. A presentation-only hint always wins over a
+     * content hint; incompatible content roles become UNKNOWN instead of being promoted.
+     */
+    fun mergeRoleHints(
+        existing: MediaAssetRole?,
+        incoming: MediaAssetRole?
+    ): MediaAssetRole? {
+        if (existing == null) return incoming
+        if (incoming == null || existing == incoming) return existing
+
+        val presentationRoles = listOf(existing, incoming).filter(::isPresentationOnlyRole)
+        if (presentationRoles.isNotEmpty()) {
+            val priority = mapOf(
+                MediaAssetRole.AD_OR_TRACKER to 8,
+                MediaAssetRole.AVATAR to 7,
+                MediaAssetRole.UI_DECORATION to 6,
+                MediaAssetRole.PAGE_COVER to 5,
+                MediaAssetRole.ARTICLE_HERO to 4,
+                MediaAssetRole.VIDEO_POSTER to 3,
+                MediaAssetRole.THUMBNAIL to 2,
+                MediaAssetRole.EMBED to 1
+            )
+            return presentationRoles.maxByOrNull { priority[it] ?: 0 }
+        }
+
+        if (setOf(existing, incoming) == setOf(MediaAssetRole.CONTENT_IMAGE, MediaAssetRole.PRODUCT_IMAGE)) {
+            return MediaAssetRole.PRODUCT_IMAGE
+        }
+
+        // UNKNOWN is deliberately sticky: conflicting explicit evidence must not promote a resource.
+        return MediaAssetRole.UNKNOWN
+    }
+
     fun shouldOfferForManualDownload(candidate: MediaDiscoveryCandidate): Boolean =
-        candidate.role !in presentationOnlyRoles &&
+        candidate.role in manualDownloadRoles &&
             candidate.verificationState !in manualDownloadBlockedStates
 
     fun canOfferDirectPlayback(candidate: MediaDiscoveryCandidate): Boolean =

@@ -1701,6 +1701,13 @@ fun PocketBookmarkViewerPage(
                         }
                     }
 
+                    RemotePlaybackPanel(
+                        bookmarkId = stack.id,
+                        originalSourceUrl = stack.sourceUrl,
+                        onOpenBrowser = onOpenBrowser,
+                        isDark = isDark
+                    )
+
                     Spacer(Modifier.height(20.dp))
                 }
             }

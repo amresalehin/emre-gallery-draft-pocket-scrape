@@ -86,6 +86,7 @@ class ExtractionCoordinator(private val context: Context) {
                     val currentItems = itemsMap.values.toList()
                     _state.value = _state.value.copy(
                         items = currentItems,
+                        discoveryCandidates = currentItems.map { MediaDiscoveryCandidate.from(it) },
                         pageTitle = if (_state.value.pageTitle.isBlank() && !title.isNullOrBlank()) title else _state.value.pageTitle,
                         statusMessage = msg ?: _state.value.statusMessage,
                         phase = phase ?: _state.value.phase
@@ -133,7 +134,13 @@ class ExtractionCoordinator(private val context: Context) {
                         mimeType = classification.mimeType,
                         sizeBytes = cl,
                         source = "Direct HTTP",
-                        provenance = MediaProvenance(extractorEngine = "OkHttp Direct", pageUrl = requestContext.url)
+                        provenance = MediaProvenance(extractorEngine = "OkHttp Direct", pageUrl = requestContext.url),
+                        metadata = mutableMapOf<String, String>().apply {
+                            put("source_url", requestContext.url)
+                            put("direct_response_confirmed", "true")
+                            put("http_status_code", directProbe.statusCode.toString())
+                            ct?.takeIf { it.isNotBlank() }?.let { put("mime_hint", it) }
+                        }
                     )
 
                     updateItems(listOf(directItem), title = derivedTitle, phase = ExtractionPhase.COMPLETED)
@@ -342,8 +349,10 @@ class ExtractionCoordinator(private val context: Context) {
         }
         val modified = MediaNormalizer.mergeCandidates(existingMap, newList)
         if (modified || title != null || domain != null) {
+            val mergedItems = existingMap.values.toList()
             _state.value = _state.value.copy(
-                items = existingMap.values.toList(),
+                items = mergedItems,
+                discoveryCandidates = mergedItems.map { MediaDiscoveryCandidate.from(it) },
                 pageTitle = title ?: _state.value.pageTitle,
                 domain = domain ?: _state.value.domain,
                 statusMessage = "Discovered ${existingMap.size} media items"

@@ -242,52 +242,94 @@ private fun RemotePlaybackDialog(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val player = remember(playback.asset.id, playback.resolution) {
-        var createdPlayer: ExoPlayer? = null
+    val playerState = remember(playback.asset.id, playback.resolution) {
+        mutableStateOf<ExoPlayer?>(null)
+    }
+    val playerViewState = remember(playback.asset.id, playback.resolution) {
+        mutableStateOf<PlayerView?>(null)
+    }
+    var playbackFailed by remember(playback.asset.id, playback.resolution) {
+        mutableStateOf(false)
+    }
+    val player = playerState.value
+
+    DisposableEffect(playback.asset.id, playback.resolution, lifecycleOwner) {
+        var activePlayer: ExoPlayer? = null
+        var playerListener: Player.Listener? = null
+        var lifecycleObserver: LifecycleEventObserver? = null
+        playbackFailed = false
+
         try {
-            val mediaSourceFactory = DefaultMediaSourceFactory(context)
+            val appContext = context.applicationContext
+            val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
                 .setDataSourceFactory(RemotePlaybackHttpClient.dataSourceFactory())
-            val created = ExoPlayer.Builder(context)
+            val created = ExoPlayer.Builder(appContext)
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
-            createdPlayer = created
+            activePlayer = created
             created.setMediaItem(RemotePlaybackMediaItemFactory.create(playback))
             created.repeatMode = Player.REPEAT_MODE_OFF
-            created.prepare()
-            created.playWhenReady = true
-            created
-        } catch (_: Exception) {
-            createdPlayer?.release()
-            null
-        }
-    }
-    var playbackFailed by remember(playback.asset.id, player) {
-        mutableStateOf(player == null)
-    }
 
-    DisposableEffect(player, lifecycleOwner) {
-        val activePlayer = player
-        if (activePlayer == null) {
-            onDispose { }
-        } else {
             val listener = object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
                     playbackFailed = true
-                    activePlayer.pause()
+                    created.pause()
                 }
             }
-            val lifecycleObserver = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
-                    activePlayer.pause()
-                }
-            }
-            activePlayer.addListener(listener)
-            lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+            playerListener = listener
+            created.addListener(listener)
 
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
-                activePlayer.removeListener(listener)
-                activePlayer.release()
+            val lifecycleController = RemotePlaybackLifecycleController(
+                pausePlayback = { created.pause() },
+                resumePlayback = { created.play() }
+            )
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_PAUSE ->
+                        lifecycleController.onPause(created.playWhenReady)
+                    Lifecycle.Event.ON_RESUME ->
+                        lifecycleController.onResume(playbackFailed)
+                    else -> Unit
+                }
+            }
+            lifecycleObserver = observer
+            lifecycleOwner.lifecycle.addObserver(observer)
+
+            val shouldStartImmediately = lifecycleOwner.lifecycle.currentState
+                .isAtLeast(Lifecycle.State.RESUMED)
+            created.playWhenReady = shouldStartImmediately
+            created.prepare()
+            if (!shouldStartImmediately) {
+                lifecycleController.onPause(playWhenReady = true)
+            }
+            playerState.value = created
+        } catch (_: Exception) {
+            lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
+            activePlayer?.let { failedPlayer ->
+                playerListener?.let { failedPlayer.removeListener(it) }
+                playerViewState.value?.let { view ->
+                    if (view.player === failedPlayer) view.player = null
+                }
+                failedPlayer.release()
+            }
+            activePlayer = null
+            playerListener = null
+            lifecycleObserver = null
+            playerState.value = null
+            playbackFailed = true
+        }
+
+        onDispose {
+            lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
+            activePlayer?.let { releasingPlayer ->
+                playerListener?.let { releasingPlayer.removeListener(it) }
+                playerViewState.value?.let { view ->
+                    if (view.player === releasingPlayer) view.player = null
+                }
+                if (playerState.value === releasingPlayer) {
+                    playerState.value = null
+                }
+                releasingPlayer.release()
             }
         }
     }
@@ -339,7 +381,7 @@ private fun RemotePlaybackDialog(
                     AndroidView(
                         factory = { viewContext ->
                             PlayerView(viewContext).apply {
-                                this.player = activePlayer
+                                player = activePlayer
                                 useController = true
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                             }
@@ -347,6 +389,11 @@ private fun RemotePlaybackDialog(
                         update = { view ->
                             if (view.player !== activePlayer) view.player = activePlayer
                             view.useController = true
+                            if (playerViewState.value !== view) playerViewState.value = view
+                        },
+                        onRelease = { view ->
+                            if (view.player === activePlayer) view.player = null
+                            if (playerViewState.value === view) playerViewState.value = null
                         },
                         modifier = Modifier
                             .fillMaxWidth()

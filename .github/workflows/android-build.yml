@@ -68,6 +68,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Verify Room schema snapshots are committed
+        shell: bash
+        run: |
+          changes="$(git status --porcelain --untracked-files=all -- app/schemas)"
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            echo "::error::Room schema changed during KSP generation. Commit the generated snapshot with the database change."
+            exit 1
+          fi
+
       - name: Upload Room schema snapshot
         uses: actions/upload-artifact@v4
         with:

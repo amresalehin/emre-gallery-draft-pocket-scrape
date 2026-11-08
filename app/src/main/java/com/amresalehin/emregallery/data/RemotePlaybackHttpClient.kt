@@ -16,8 +16,9 @@ import java.util.concurrent.TimeUnit
  * Every request is checked before dispatch and every hostname is checked again by
  * [PublicInternetDns] when OkHttp resolves the connection destination.
  *
- * Automatic OkHttp redirects are disabled. Media3 may handle supported HTTP redirects itself;
- * any follow-up request still passes through this URL guard and the public-address DNS policy.
+ * Redirects are intentionally not followed by OkHttp. The Media3 OkHttp data source receives a
+ * 3xx response and fails closed; callers should return to the original source page. A future
+ * explicit redirect implementation must validate each target and reject HTTPS downgrades.
  */
 object RemotePlaybackHttpClient {
     const val USER_AGENT = "EmrePocket/1.0 (remote playback)"

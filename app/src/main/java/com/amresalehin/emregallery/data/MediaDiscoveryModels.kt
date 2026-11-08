@@ -182,6 +182,27 @@ data class MediaDiscoveryCandidate(
 
 /** Conservative presentation and playback gates shared by discovery consumers. */
 object MediaDiscoveryPolicy {
+    private val presentationOnlyRoles = setOf(
+        MediaAssetRole.PAGE_COVER,
+        MediaAssetRole.ARTICLE_HERO,
+        MediaAssetRole.THUMBNAIL,
+        MediaAssetRole.VIDEO_POSTER,
+        MediaAssetRole.EMBED,
+        MediaAssetRole.AVATAR,
+        MediaAssetRole.UI_DECORATION,
+        MediaAssetRole.AD_OR_TRACKER
+    )
+
+    private val manualDownloadBlockedStates = setOf(
+        MediaVerificationState.BROWSER_ONLY,
+        MediaVerificationState.AUTH_REQUIRED,
+        MediaVerificationState.ACCESS_RESTRICTED,
+        MediaVerificationState.RATE_LIMITED,
+        MediaVerificationState.EXPIRED,
+        MediaVerificationState.UNSUPPORTED,
+        MediaVerificationState.REJECTED
+    )
+
     private val galleryRoles = setOf(
         MediaAssetRole.CONTENT_IMAGE,
         MediaAssetRole.PRODUCT_IMAGE,
@@ -199,6 +220,15 @@ object MediaDiscoveryPolicy {
             candidate.verificationState == MediaVerificationState.PLAYABLE_EMBED
         else -> false
     }
+
+    /**
+     * Whether a resource may appear in the user's explicit download-selection list.
+     * This is not a verification or enqueue decision; weak content candidates still require
+     * a separate user action before any download can start.
+     */
+    fun shouldOfferForManualDownload(candidate: MediaDiscoveryCandidate): Boolean =
+        candidate.role !in presentationOnlyRoles &&
+            candidate.verificationState !in manualDownloadBlockedStates
 
     fun canOfferDirectPlayback(candidate: MediaDiscoveryCandidate): Boolean =
         candidate.role in setOf(MediaAssetRole.CONTENT_VIDEO, MediaAssetRole.CONTENT_AUDIO) &&

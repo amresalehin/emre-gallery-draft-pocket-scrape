@@ -465,11 +465,12 @@ fun DirectBrowserView(
                             }
 
                             addJavascriptInterface(
-                                BrowserSession.EmreMediaBridge { rawUrl ->
+                                BrowserSession.EmreMediaBridge { rawUrl, assetRole ->
                                     val item = MediaCaptureEngine.buildMediaItem(
                                         rawUrl = rawUrl,
                                         source = ExtractionSource.DOM_SCRAPE,
-                                        baseUrl = currentUrl
+                                        baseUrl = currentUrl,
+                                        assetRoleHint = assetRole
                                     )
                                     if (item != null) {
                                         tabSession.registerMedia(item)

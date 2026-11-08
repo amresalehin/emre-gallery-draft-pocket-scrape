@@ -141,11 +141,11 @@ object BrowserSession {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    class EmreMediaBridge(private val onMediaFound: (String) -> Unit) {
+    class EmreMediaBridge(private val onMediaFound: (String, String?) -> Unit) {
         @android.webkit.JavascriptInterface
-        fun reportMedia(url: String?) {
+        fun reportMedia(url: String?, assetRole: String?) {
             if (!url.isNullOrBlank()) {
-                onMediaFound(url)
+                onMediaFound(url, assetRole)
             }
         }
     }
@@ -262,12 +262,13 @@ object BrowserSession {
                 }
 
                 wv.addJavascriptInterface(
-                    EmreMediaBridge { rawUrl ->
+                    EmreMediaBridge { rawUrl, assetRole ->
                         mainHandler.post {
                             val item = MediaNormalizer.normalize(
                                 rawUrl = rawUrl,
                                 source = ExtractionSource.DOM_SCRAPE,
-                                baseUrl = normalizedUrl
+                                baseUrl = normalizedUrl,
+                                assetRoleHint = assetRole
                             )
                             if (item != null) ingest(listOf(item))
                         }

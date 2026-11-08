@@ -57,11 +57,44 @@ object MediaCaptureEngine {
                     return false;
                 }
 
+                // Role hints are conservative: only explicit avatar/preview markers are excluded.
+                function imageAssetRole(el) {
+                    if (!el) return 'CONTENT_IMAGE';
+                    var hints = [
+                        el.id || '',
+                        typeof el.className === 'string' ? el.className : '',
+                        el.getAttribute('alt') || '',
+                        el.getAttribute('title') || '',
+                        el.getAttribute('data-testid') || '',
+                        el.getAttribute('aria-label') || ''
+                    ].join(' ').toLowerCase();
+                    var avatarContainer = el.closest(
+                        '[class*="avatar" i], [id*="avatar" i], [data-testid*="avatar" i], ' +
+                        '[class*="userpic" i], [class*="profile-photo" i], [class*="profile_picture" i], ' +
+                        '[class*="author-avatar" i], [class*="account-photo" i]'
+                    );
+                    if (avatarContainer || /(^|[ _-])(avatar|userpic|profile[-_ ]?(photo|picture|image)|author[-_ ]?avatar|account[-_ ]?photo)([ _-]|$)/.test(hints)) {
+                        return 'AVATAR';
+                    }
+                    var previewContainer = el.closest(
+                        '[class*="video-thumbnail" i], [class*="video-thumb" i], [class*="media-preview" i], ' +
+                        '[class*="preview-image" i], [data-role="thumbnail"], [data-testid*="video-preview" i]'
+                    );
+                    if (previewContainer || /(^|[ _-])(video[-_ ]?thumbnail|media[-_ ]?preview|poster)([ _-]|$)/.test(hints)) {
+                        return 'THUMBNAIL';
+                    }
+                    if (el.closest('[class*="product-gallery" i], [class*="product-image" i], [class*="woocommerce-product" i]')) {
+                        return 'PRODUCT_IMAGE';
+                    }
+                    return 'CONTENT_IMAGE';
+                }
+
                 // 1. Deep Image Inspection (img, picture, data attributes, srcset)
                 var images = document.querySelectorAll('img, picture source');
                 for (var i = 0; i < images.length; i++) {
                     var img = images[i];
                     if (isChromeElement(img)) continue;
+                    var assetRole = imageAssetRole(img);
 
                     var candidateUrls = [];
 
@@ -78,7 +111,7 @@ object MediaCaptureEngine {
                                 if (u && u.indexOf('data:') !== 0) {
                                     var absSrcset = resolveAbs(u);
                                     if (absSrcset) {
-                                        list.push({u: absSrcset, s: 'SRCSET', r: descriptor});
+                                        list.push({u: absSrcset, s: 'SRCSET', r: descriptor, a: assetRole});
                                     }
                                 }
                             }
@@ -93,11 +126,11 @@ object MediaCaptureEngine {
 
                     if (dataSrc && dataSrc.indexOf('data:') !== 0) {
                         var absData = resolveAbs(dataSrc);
-                        if (absData) candidateUrls.push({u: absData, s: 'DATA_SRC'});
+                        if (absData) candidateUrls.push({u: absData, s: 'DATA_SRC', a: assetRole});
                     }
                     if (rawSrc && rawSrc.indexOf('data:') !== 0) {
                         var absRaw = resolveAbs(rawSrc);
-                        if (absRaw) candidateUrls.push({u: absRaw, s: 'DOM'});
+                        if (absRaw) candidateUrls.push({u: absRaw, s: 'DOM', a: assetRole});
                     }
 
                     for (var c = 0; c < candidateUrls.length; c++) {
@@ -124,7 +157,7 @@ object MediaCaptureEngine {
                         }
                     }
                     if (chosenVideo) {
-                        list.push({u: chosenVideo, s: 'DOM', p: poster, r: 'video'});
+                        list.push({u: chosenVideo, s: 'DOM', p: poster, r: 'video', a: 'CONTENT_VIDEO'});
                     }
                     // A poster without a media source is presentation metadata, not content media.
                 }
@@ -147,7 +180,7 @@ object MediaCaptureEngine {
                         }
                     }
                     if (chosenAudio) {
-                        list.push({u: chosenAudio, s: 'DOM', r: 'audio'});
+                        list.push({u: chosenAudio, s: 'DOM', r: 'audio', a: 'CONTENT_AUDIO'});
                     }
                 }
 
@@ -161,7 +194,15 @@ object MediaCaptureEngine {
                             var item = arr[idx];
                             if (item.contentUrl) {
                                 var cu = resolveAbs(item.contentUrl);
-                                if (cu) list.push({u: cu, s: 'DOM', r: 'json-ld'});
+                                var itemType = Array.isArray(item['@type']) ? item['@type'].join(' ') : String(item['@type'] || '');
+                                var structuredRole = /videoobject/i.test(itemType) ? 'CONTENT_VIDEO' :
+                                    (/audioobject/i.test(itemType) ? 'CONTENT_AUDIO' :
+                                        (/imageobject/i.test(itemType) ? 'CONTENT_IMAGE' : null));
+                                if (cu) {
+                                    var structuredCandidate = {u: cu, s: 'DOM', r: 'json-ld'};
+                                    if (structuredRole) structuredCandidate.a = structuredRole;
+                                    list.push(structuredCandidate);
+                                }
                             }
                             // thumbnailUrl and image are page-preview signals. PagePreviewResolver
                             // owns them; only contentUrl is eligible for media discovery.
@@ -181,7 +222,7 @@ object MediaCaptureEngine {
                             var match = bg.match(/url\(['"]?(.*?)['"]?\)/);
                             if (match && match[1] && !match[1].startsWith('data:')) {
                                 var bgu = resolveAbs(match[1]);
-                                if (bgu) list.push({u: bgu, s: 'CSS', r: 'background'});
+                                if (bgu) list.push({u: bgu, s: 'CSS', r: 'background', a: 'CONTENT_IMAGE'});
                             }
                         }
                     }
@@ -192,7 +233,7 @@ object MediaCaptureEngine {
                 for (var f = 0; f < iframes.length; f++) {
                     var ifr = resolveAbs(iframes[f].src);
                     if (ifr && /\.(?:mp4|webm|mkv|mov|mp3|m4a|wav|jpe?g|png|webp|gif|avif)(?:[?#]|$)/i.test(ifr)) {
-                        list.push({u: ifr, s: 'IFRAME', r: 'iframe'});
+                        list.push({u: ifr, s: 'IFRAME', r: 'iframe', a: 'EMBED'});
                     }
                 }
 
@@ -210,43 +251,76 @@ object MediaCaptureEngine {
                 if (window.__emreObserverInstalled) return;
                 window.__emreObserverInstalled = true;
 
-                function report(u) {
+                function report(u, assetRole) {
                     if (!u || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0) return;
                     try {
                         var abs = new URL(u, document.baseURI || window.location.href).href;
                         if (window.EmreBridge && window.EmreBridge.reportMedia) {
-                            window.EmreBridge.reportMedia(abs);
+                            window.EmreBridge.reportMedia(abs, assetRole);
                         }
                     } catch(e) {}
+                }
+
+                // Role hints are conservative: only explicit avatar/preview markers are excluded.
+                function imageAssetRole(el) {
+                    if (!el) return 'CONTENT_IMAGE';
+                    var hints = [
+                        el.id || '',
+                        typeof el.className === 'string' ? el.className : '',
+                        el.getAttribute('alt') || '',
+                        el.getAttribute('title') || '',
+                        el.getAttribute('data-testid') || '',
+                        el.getAttribute('aria-label') || ''
+                    ].join(' ').toLowerCase();
+                    var avatarContainer = el.closest(
+                        '[class*="avatar" i], [id*="avatar" i], [data-testid*="avatar" i], ' +
+                        '[class*="userpic" i], [class*="profile-photo" i], [class*="profile_picture" i], ' +
+                        '[class*="author-avatar" i], [class*="account-photo" i]'
+                    );
+                    if (avatarContainer || /(^|[ _-])(avatar|userpic|profile[-_ ]?(photo|picture|image)|author[-_ ]?avatar|account[-_ ]?photo)([ _-]|$)/.test(hints)) {
+                        return 'AVATAR';
+                    }
+                    var previewContainer = el.closest(
+                        '[class*="video-thumbnail" i], [class*="video-thumb" i], [class*="media-preview" i], ' +
+                        '[class*="preview-image" i], [data-role="thumbnail"], [data-testid*="video-preview" i]'
+                    );
+                    if (previewContainer || /(^|[ _-])(video[-_ ]?thumbnail|media[-_ ]?preview|poster)([ _-]|$)/.test(hints)) {
+                        return 'THUMBNAIL';
+                    }
+                    if (el.closest('[class*="product-gallery" i], [class*="product-image" i], [class*="woocommerce-product" i]')) {
+                        return 'PRODUCT_IMAGE';
+                    }
+                    return 'CONTENT_IMAGE';
                 }
 
                 function checkNode(node) {
                     if (!node || node.nodeType !== 1) return;
                     var tag = node.tagName ? node.tagName.toUpperCase() : '';
                     if (tag === 'IMG') {
-                        report(node.src);
-                        report(node.getAttribute('data-src'));
-                        report(node.getAttribute('data-original'));
-                        report(node.getAttribute('data-lazy-src'));
-                        report(node.getAttribute('data-large-file'));
-                        report(node.getAttribute('data-hi-res-src'));
+                        var imageRole = imageAssetRole(node);
+                        report(node.src, imageRole);
+                        report(node.getAttribute('data-src'), imageRole);
+                        report(node.getAttribute('data-original'), imageRole);
+                        report(node.getAttribute('data-lazy-src'), imageRole);
+                        report(node.getAttribute('data-large-file'), imageRole);
+                        report(node.getAttribute('data-hi-res-src'), imageRole);
                         var srcset = node.getAttribute('srcset') || node.getAttribute('data-srcset');
                         if (srcset) {
                             var parts = srcset.split(',');
                             for (var i = 0; i < parts.length; i++) {
                                 var bit = parts[i].trim().split(/\s+/)[0];
-                                if (bit) report(bit);
+                                if (bit) report(bit, imageRole);
                             }
                         }
                     } else if (tag === 'VIDEO') {
                         if (node.src && node.src.indexOf('blob:') !== 0 && node.src.indexOf('data:') !== 0) {
-                            report(node.src);
+                            report(node.src, 'CONTENT_VIDEO');
                         } else if (node.querySelectorAll) {
                             var vSources = node.querySelectorAll('source');
                             for (var vs = 0; vs < vSources.length; vs++) {
                                 var vsSrc = vSources[vs].src;
                                 if (vsSrc && vsSrc.indexOf('blob:') !== 0 && vsSrc.indexOf('data:') !== 0) {
-                                    report(vsSrc);
+                                    report(vsSrc, 'CONTENT_VIDEO');
                                     break;
                                 }
                             }
@@ -254,13 +328,13 @@ object MediaCaptureEngine {
                         // A video poster is a preview, not an independently playable media asset.
                     } else if (tag === 'AUDIO') {
                         if (node.src && node.src.indexOf('blob:') !== 0 && node.src.indexOf('data:') !== 0) {
-                            report(node.src);
+                            report(node.src, 'CONTENT_AUDIO');
                         } else if (node.querySelectorAll) {
                             var aSources = node.querySelectorAll('source');
                             for (var as = 0; as < aSources.length; as++) {
                                 var asSrc = aSources[as].src;
                                 if (asSrc && asSrc.indexOf('blob:') !== 0 && asSrc.indexOf('data:') !== 0) {
-                                    report(asSrc);
+                                    report(asSrc, 'CONTENT_AUDIO');
                                     break;
                                 }
                             }
@@ -268,8 +342,10 @@ object MediaCaptureEngine {
                     } else if (tag === 'SOURCE') {
                         var parentTag = node.parentNode ? (node.parentNode.tagName || '').toUpperCase() : '';
                         if (parentTag !== 'VIDEO' && parentTag !== 'AUDIO') {
-                            report(node.src);
-                            report(node.getAttribute('srcset'));
+                            var picture = node.closest ? node.closest('picture') : null;
+                            var imageRole = picture ? imageAssetRole(picture) : 'CONTENT_IMAGE';
+                            report(node.src, imageRole);
+                            report(node.getAttribute('srcset'), imageRole);
                         }
                     }
 
@@ -345,7 +421,8 @@ object MediaCaptureEngine {
         domSelector: String? = null,
         declaredWidth: Int? = null,
         declaredHeight: Int? = null,
-        customId: String? = null
+        customId: String? = null,
+        assetRoleHint: String? = null
     ): ScrapedMediaItem? {
         val trimmed = rawUrl.trim()
         if (trimmed.startsWith("blob:", ignoreCase = true)) return null
@@ -390,6 +467,11 @@ object MediaCaptureEngine {
         resolutionHint?.let { metadataMap["resolution"] = it }
         mimeHint?.let { metadataMap["mime_hint"] = it }
         metadataMap["source_url"] = baseUrl
+        assetRoleHint
+            ?.trim()
+            ?.uppercase(java.util.Locale.ROOT)
+            ?.let { value -> runCatching { MediaAssetRole.valueOf(value) }.getOrNull() }
+            ?.let { role -> metadataMap["asset_role"] = role.name }
 
         val engineLabel = when (source) {
             ExtractionSource.STATIC_HTML -> "Static HTML"
@@ -567,6 +649,7 @@ object MediaCaptureEngine {
                         else -> ExtractionSource.DOM_SCRAPE
                     }
                     val poster = obj.optString("p", "").ifBlank { null }
+                    val assetRoleHint = obj.optString("a", "").ifBlank { null }
                     val resolutionHint = res?.takeIf {
                         Regex("""(?i)(?:\d+(?:\.\d+)?x|\d+w)""").matches(it)
                     }
@@ -576,7 +659,8 @@ object MediaCaptureEngine {
                         baseUrl = baseUrl,
                         poster = poster,
                         resolutionHint = resolutionHint,
-                        indexHint = i
+                        indexHint = i,
+                        assetRoleHint = assetRoleHint
                     )
                     if (item != null) {
                         results.add(item)

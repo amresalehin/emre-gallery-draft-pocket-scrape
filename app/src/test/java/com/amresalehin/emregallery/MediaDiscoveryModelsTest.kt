@@ -1,5 +1,6 @@
 package com.amresalehin.emregallery
 
+import com.amresalehin.emregallery.data.DownloaderSession
 import com.amresalehin.emregallery.data.MediaAssetRole
 import com.amresalehin.emregallery.data.MediaCategory
 import com.amresalehin.emregallery.data.MediaDiscoveryCandidate
@@ -184,6 +185,60 @@ class MediaDiscoveryModelsTest {
         assertTrue(candidate.evidence.any { it.source == MediaDiscoveryEvidenceSource.PROVIDER_EXTRACTOR })
         assertTrue(candidate.evidence.none { it.detail.contains("must-not-enter-evidence") })
         assertFalse(candidate.toString().contains("must-not-enter-evidence"))
+    }
+
+    @Test
+    fun manualDownloadSelectionExcludesPresentationOnlyAndBlockedCandidates() {
+        val content = MediaDiscoveryCandidate.from(mediaItem()).copy(
+            verificationState = MediaVerificationState.NEEDS_VERIFICATION
+        )
+        assertTrue(MediaDiscoveryPolicy.shouldOfferForManualDownload(content))
+
+        val excludedRoles = listOf(
+            MediaAssetRole.PAGE_COVER,
+            MediaAssetRole.ARTICLE_HERO,
+            MediaAssetRole.THUMBNAIL,
+            MediaAssetRole.VIDEO_POSTER,
+            MediaAssetRole.EMBED,
+            MediaAssetRole.AVATAR,
+            MediaAssetRole.UI_DECORATION,
+            MediaAssetRole.AD_OR_TRACKER
+        )
+        excludedRoles.forEach { role ->
+            assertFalse(
+                "$role must not enter manual download selection",
+                MediaDiscoveryPolicy.shouldOfferForManualDownload(content.copy(role = role))
+            )
+        }
+
+        listOf(
+            MediaVerificationState.BROWSER_ONLY,
+            MediaVerificationState.AUTH_REQUIRED,
+            MediaVerificationState.ACCESS_RESTRICTED,
+            MediaVerificationState.RATE_LIMITED,
+            MediaVerificationState.EXPIRED,
+            MediaVerificationState.UNSUPPORTED,
+            MediaVerificationState.REJECTED
+        ).forEach { state ->
+            assertFalse(
+                "$state must remain source-page-only",
+                MediaDiscoveryPolicy.shouldOfferForManualDownload(content.copy(verificationState = state))
+            )
+        }
+    }
+
+    @Test
+    fun downloaderSessionDoesNotOfferTaggedAvatarsOrThumbnails() {
+        DownloaderSession.startSession("https://example.com/gallery")
+        val avatar = mediaItem(metadata = mapOf("asset_role" to "AVATAR")).copy(id = "avatar")
+        val thumbnail = mediaItem(metadata = mapOf("asset_role" to "THUMBNAIL")).copy(id = "thumbnail")
+        val content = mediaItem().copy(id = "content")
+
+        DownloaderSession.addDiscoveredItems(listOf(avatar, thumbnail, content))
+
+        assertEquals(listOf("content"), DownloaderSession.discoveredItems.value.map { it.id })
+        assertEquals(setOf("content"), DownloaderSession.selectedItemIds.value)
+        assertEquals(MediaVerificationState.NEEDS_VERIFICATION, MediaDiscoveryCandidate.from(content).verificationState)
     }
 
     private fun mediaItem(

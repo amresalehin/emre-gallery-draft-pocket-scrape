@@ -65,14 +65,19 @@ object DownloaderSession {
 
     fun addDiscoveredItems(newItems: List<ScrapedMediaItem>, title: String? = null) {
         if (newItems.isEmpty()) return
+        val selectableItems = newItems.filter { item ->
+            MediaDiscoveryPolicy.shouldOfferForManualDownload(MediaDiscoveryCandidate.from(item))
+        }
         synchronized(itemsLock) {
-            val updated = MediaNormalizer.mergeCandidates(canonicalMap, newItems)
-            if (updated) {
-                val sorted = canonicalMap.values.toList()
-                _discoveredItems.value = sorted
-                // Auto-select all items by default if user hasn't explicitly customized selection
-                if (_selectedItemIds.value.isEmpty()) {
-                    _selectedItemIds.value = sorted.map { it.id }.toSet()
+            if (selectableItems.isNotEmpty()) {
+                val updated = MediaNormalizer.mergeCandidates(canonicalMap, selectableItems)
+                if (updated) {
+                    val sorted = canonicalMap.values.toList()
+                    _discoveredItems.value = sorted
+                    // This updates selection only; enqueueing still requires a separate user action.
+                    if (_selectedItemIds.value.isEmpty()) {
+                        _selectedItemIds.value = sorted.map { it.id }.toSet()
+                    }
                 }
             }
             if (!title.isNullOrBlank() && _pageTitle.value == _sourceDomain.value) {

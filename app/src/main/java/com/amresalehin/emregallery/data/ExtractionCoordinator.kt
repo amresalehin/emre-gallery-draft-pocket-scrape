@@ -86,9 +86,11 @@ class ExtractionCoordinator(private val context: Context) {
                 val modified = MediaNormalizer.mergeCandidates(itemsMap, newList)
                 if (modified || msg != null || phase != null || title != null) {
                     val currentItems = itemsMap.values.toList()
+                    val discoveryCandidates = currentItems.map { MediaDiscoveryCandidate.from(it) }
                     _state.value = _state.value.copy(
                         items = currentItems,
-                        discoveryCandidates = currentItems.map { MediaDiscoveryCandidate.from(it) },
+                        discoveryCandidates = discoveryCandidates,
+                        galleryAssessment = GalleryDetector.assess(discoveryCandidates),
                         pageTitle = if (_state.value.pageTitle.isBlank() && !title.isNullOrBlank()) title else _state.value.pageTitle,
                         statusMessage = msg ?: _state.value.statusMessage,
                         phase = phase ?: _state.value.phase
@@ -272,7 +274,8 @@ class ExtractionCoordinator(private val context: Context) {
                         if (discoveryResult != null) {
                             itemsMutex.withLock {
                                 _state.value = _state.value.copy(
-                                    discoveryCandidates = discoveryResult.candidates
+                                    discoveryCandidates = discoveryResult.candidates,
+                                    galleryAssessment = GalleryDetector.assess(discoveryResult.candidates)
                                 )
                             }
                         }
@@ -390,9 +393,11 @@ class ExtractionCoordinator(private val context: Context) {
         val modified = MediaNormalizer.mergeCandidates(existingMap, newList)
         if (modified || title != null || domain != null) {
             val mergedItems = existingMap.values.toList()
+            val discoveryCandidates = mergedItems.map { MediaDiscoveryCandidate.from(it) }
             _state.value = _state.value.copy(
                 items = mergedItems,
-                discoveryCandidates = mergedItems.map { MediaDiscoveryCandidate.from(it) },
+                discoveryCandidates = discoveryCandidates,
+                galleryAssessment = GalleryDetector.assess(discoveryCandidates),
                 pageTitle = title ?: _state.value.pageTitle,
                 domain = domain ?: _state.value.domain,
                 statusMessage = "Discovered ${existingMap.size} media items"

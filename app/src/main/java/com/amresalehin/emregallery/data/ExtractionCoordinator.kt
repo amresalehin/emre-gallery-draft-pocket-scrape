@@ -108,6 +108,9 @@ class ExtractionCoordinator(private val context: Context) {
                 // Step 1: OkHttp Direct-Media Fast Path Probe
                 updateStatus("Probing URL headers with OkHttp...", ExtractionPhase.DIRECT_MEDIA)
                 val directProbe = OkHttpDownloader.probeDirectMedia(requestContext.url)
+                itemsMutex.withLock {
+                    _state.value = _state.value.copy(directProbeState = directProbe.verificationState)
+                }
 
                 if (directProbe.isConfirmedDirectMedia) {
                     val finalUrl = directProbe.finalUrl

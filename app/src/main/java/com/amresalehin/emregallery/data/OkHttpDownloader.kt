@@ -193,7 +193,27 @@ object OkHttpDownloader {
         val contentDisposition: String?,
         val contentLength: Long?,
         val statusCode: Int
-    )
+    ) {
+        /** The probe outcome is retained even when the URL is not a direct media resource. */
+        val verificationState: MediaVerificationState
+            get() {
+                val normalizedContentType = contentType
+                    ?.substringBefore(";")
+                    ?.trim()
+                    ?.lowercase(Locale.ROOT)
+                return when {
+                    isConfirmedDirectMedia -> MediaVerificationState.VERIFIED_RESOURCE
+                    statusCode == 401 -> MediaVerificationState.AUTH_REQUIRED
+                    statusCode == 403 -> MediaVerificationState.ACCESS_RESTRICTED
+                    statusCode == 429 -> MediaVerificationState.RATE_LIMITED
+                    statusCode == 410 -> MediaVerificationState.EXPIRED
+                    normalizedContentType == "text/html" ||
+                        normalizedContentType == "application/xhtml+xml" ->
+                        MediaVerificationState.BROWSER_ONLY
+                    else -> MediaVerificationState.NEEDS_VERIFICATION
+                }
+            }
+    }
 
     /**
      * Probes an arbitrary URL using OkHttp (HEAD request with fast Range GET fallback)
@@ -212,28 +232,38 @@ object OkHttpDownloader {
                 }
                 .build()
 
-            val headResp = runCatching { client.newCall(headReq).execute() }.getOrNull()
-            if (headResp != null && headResp.isSuccessful) {
-                headResp.use { resp ->
-                    val ct = resp.header("Content-Type")?.lowercase(Locale.ROOT)
-                    val cd = resp.header("Content-Disposition")
-                    val cl = resp.header("Content-Length")?.toLongOrNull()
-                    val finalUrl = resp.request.url.toString()
-                    val isMedia = isMediaContentType(ct) || hasMediaContentDisposition(cd) || isDirectMediaExtension(finalUrl)
-                    if (isMedia) {
-                        return@withContext DirectMediaProbeResult(
-                            isConfirmedDirectMedia = true,
-                            finalUrl = finalUrl,
-                            contentType = ct,
-                            contentDisposition = cd,
-                            contentLength = cl,
-                            statusCode = resp.code
-                        )
-                    }
+            val headResponse = runCatching { client.newCall(headReq).execute() }.getOrNull()
+            if (headResponse != null) {
+                val headResult = headResponse.use { response ->
+                    val contentType = response.header("Content-Type")?.lowercase(Locale.ROOT)
+                    val contentDisposition = response.header("Content-Disposition")
+                    DirectMediaProbeResult(
+                        isConfirmedDirectMedia = isConfirmedMediaResponse(
+                            response.code,
+                            contentType,
+                            contentDisposition
+                        ),
+                        finalUrl = response.request.url.toString(),
+                        contentType = contentType,
+                        contentDisposition = contentDisposition,
+                        contentLength = response.header("Content-Length")?.toLongOrNull(),
+                        statusCode = response.code
+                    )
+                }
+
+                // Do not retry access-denied, rate-limited, expired, or HTML responses with Range.
+                // Those outcomes are meaningful browser/access states, not inconclusive media probes.
+                if (
+                    headResult.isConfirmedDirectMedia ||
+                    headResult.statusCode in setOf(401, 403, 410, 429) ||
+                    isHtmlDocumentContentType(headResult.contentType)
+                ) {
+                    return@withContext headResult
                 }
             }
 
-            // Fallback: fast Range GET (0-1024) to probe server if HEAD was rejected or inconclusive
+            // A bounded Range request is used only when HEAD is unsupported or inconclusive.
+            // A server that ignores Range and answers 200 is not treated as verified.
             val rangeReq = Request.Builder()
                 .url(url)
                 .header("Range", "bytes=0-1024")
@@ -242,22 +272,25 @@ object OkHttpDownloader {
                 }
                 .build()
 
-            client.newCall(rangeReq).execute().use { resp ->
-                val ct = resp.header("Content-Type")?.lowercase(Locale.ROOT)
-                val cd = resp.header("Content-Disposition")
-                val cl = resp.header("Content-Length")?.toLongOrNull()
-                val finalUrl = resp.request.url.toString()
-                val isMedia = (resp.code in 200..206) && (isMediaContentType(ct) || hasMediaContentDisposition(cd) || isDirectMediaExtension(finalUrl))
+            client.newCall(rangeReq).execute().use { response ->
+                val contentType = response.header("Content-Type")?.lowercase(Locale.ROOT)
+                val contentDisposition = response.header("Content-Disposition")
                 DirectMediaProbeResult(
-                    isConfirmedDirectMedia = isMedia,
-                    finalUrl = finalUrl,
-                    contentType = ct,
-                    contentDisposition = cd,
-                    contentLength = cl,
-                    statusCode = resp.code
+                    isConfirmedDirectMedia = response.code == 206 &&
+                        hasBoundedContentRange(response.header("Content-Range")) &&
+                        isConfirmedMediaResponse(
+                            response.code,
+                            contentType,
+                            contentDisposition
+                        ),
+                    finalUrl = response.request.url.toString(),
+                    contentType = contentType,
+                    contentDisposition = contentDisposition,
+                    contentLength = response.header("Content-Length")?.toLongOrNull(),
+                    statusCode = response.code
                 )
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             DirectMediaProbeResult(
                 isConfirmedDirectMedia = false,
                 finalUrl = url,
@@ -269,33 +302,100 @@ object OkHttpDownloader {
         }
     }
 
-    private fun isMediaContentType(ct: String?): Boolean {
-        if (ct.isNullOrBlank()) return false
-        val clean = ct.substringBefore(";").trim().lowercase(Locale.ROOT)
+    private val MEDIA_FILE_EXTENSIONS = setOf(
+        "mp4", "m4v", "mov", "webm", "mkv", "ogv", "3gp",
+        "jpg", "jpeg", "png", "webp", "gif", "avif", "heic", "bmp",
+        "mp3", "m4a", "aac", "flac", "wav", "oga", "ogg", "opus",
+        "m3u8", "mpd"
+    )
+
+    private fun isConfirmedMediaResponse(
+        statusCode: Int,
+        contentType: String?,
+        contentDisposition: String?
+    ): Boolean {
+        if (statusCode !in 200..299) return false
+
+        val normalizedType = contentType
+            ?.substringBefore(";")
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+
+        // A document/text response must never be promoted by a media-looking URL or filename.
+        if (isNonMediaDocumentContentType(normalizedType)) return false
+        if (isMediaContentType(normalizedType)) return true
+
+        val genericBinaryType = normalizedType == null || normalizedType in setOf(
+            "application/octet-stream",
+            "binary/octet-stream",
+            "application/download",
+            "application/x-download",
+            "application/force-download"
+        )
+        return genericBinaryType && hasMediaContentDisposition(contentDisposition)
+    }
+
+    private fun isMediaContentType(contentType: String?): Boolean {
+        if (contentType.isNullOrBlank()) return false
+        val clean = contentType.substringBefore(";").trim().lowercase(Locale.ROOT)
         return clean.startsWith("image/") ||
-                clean.startsWith("video/") ||
-                clean.startsWith("audio/") ||
-                clean == "application/x-mpegurl" ||
-                clean == "application/vnd.apple.mpegurl" ||
-                clean == "application/dash+xml"
+            clean.startsWith("video/") ||
+            clean.startsWith("audio/") ||
+            clean == "application/x-mpegurl" ||
+            clean == "application/vnd.apple.mpegurl" ||
+            clean == "application/dash+xml"
     }
 
-    private fun hasMediaContentDisposition(cd: String?): Boolean {
-        if (cd.isNullOrBlank()) return false
-        val lower = cd.lowercase(Locale.ROOT)
-        return lower.contains(".mp4") || lower.contains(".webm") || lower.contains(".mkv") ||
-                lower.contains(".jpg") || lower.contains(".jpeg") || lower.contains(".png") ||
-                lower.contains(".webp") || lower.contains(".gif") || lower.contains(".mp3") ||
-                lower.contains(".m4a") || lower.contains(".flac") || lower.contains(".wav")
+    private fun isNonMediaDocumentContentType(contentType: String?): Boolean {
+        if (contentType.isNullOrBlank()) return false
+        val clean = contentType.substringBefore(";").trim().lowercase(Locale.ROOT)
+        return clean.startsWith("text/") ||
+            clean == "application/xhtml+xml" ||
+            clean == "application/xml" ||
+            clean == "application/json" ||
+            clean.endsWith("+json")
     }
 
-    private fun isDirectMediaExtension(url: String): Boolean {
-        val clean = url.substringBefore("?").substringBefore("#").lowercase(Locale.ROOT)
-        return clean.endsWith(".mp4") || clean.endsWith(".webm") || clean.endsWith(".mkv") ||
-                clean.endsWith(".mov") || clean.endsWith(".jpg") || clean.endsWith(".jpeg") ||
-                clean.endsWith(".png") || clean.endsWith(".webp") || clean.endsWith(".gif") ||
-                clean.endsWith(".m3u8") || clean.endsWith(".mpd") || clean.endsWith(".mp3") ||
-                clean.endsWith(".m4a") || clean.endsWith(".flac") || clean.endsWith(".wav")
+    private val BOUNDED_CONTENT_RANGE_PATTERN =
+        Regex("(?i)^bytes\\s+0-(\\d+)/(\\d+|\\*)$")
+
+    private fun hasBoundedContentRange(contentRange: String?): Boolean {
+        val match = contentRange?.trim()?.let(BOUNDED_CONTENT_RANGE_PATTERN::matchEntire)
+            ?: return false
+        val lastByte = match.groupValues[1].toLongOrNull() ?: return false
+        val totalBytes = match.groupValues[2].toLongOrNull()
+        return lastByte <= 1024L && (totalBytes == null || totalBytes > lastByte)
+    }
+
+    private fun isHtmlDocumentContentType(contentType: String?): Boolean {
+        if (contentType.isNullOrBlank()) return false
+        val clean = contentType.substringBefore(";").trim().lowercase(Locale.ROOT)
+        return clean == "text/html" || clean == "application/xhtml+xml"
+    }
+
+    private fun hasMediaContentDisposition(contentDisposition: String?): Boolean {
+        if (contentDisposition.isNullOrBlank()) return false
+        val parameters = contentDisposition.split(';')
+        val dispositionType = parameters.firstOrNull()?.trim()?.lowercase(Locale.ROOT)
+        if (dispositionType !in setOf("attachment", "inline")) return false
+
+        val filenameValue = parameters.drop(1).firstNotNullOfOrNull { parameter ->
+            val name = parameter.substringBefore("=").trim()
+            if (name.equals("filename", ignoreCase = true) ||
+                name.equals("filename*", ignoreCase = true)
+            ) {
+                parameter.substringAfter("=", "").trim()
+            } else {
+                null
+            }
+        } ?: return false
+
+        val unquoted = filenameValue.removeSurrounding("\"").removeSurrounding("'")
+        val decoded = unquoted.substringAfter("''", unquoted)
+        val filename = decoded.substringAfterLast('/').substringAfterLast('\\')
+        val extension = filename.substringAfterLast('.', "").substringBefore('?')
+            .lowercase(Locale.ROOT)
+        return extension in MEDIA_FILE_EXTENSIONS
     }
 
     /**

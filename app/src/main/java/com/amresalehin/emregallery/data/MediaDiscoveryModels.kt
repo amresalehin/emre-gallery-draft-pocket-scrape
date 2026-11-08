@@ -35,6 +35,8 @@ enum class MediaVerificationState {
     PLAYABLE_EMBED,
     BROWSER_ONLY,
     AUTH_REQUIRED,
+    ACCESS_RESTRICTED,
+    RATE_LIMITED,
     EXPIRED,
     UNSUPPORTED,
     REJECTED
@@ -209,6 +211,8 @@ object MediaDiscoveryPolicy {
         candidate.verificationState in setOf(
             MediaVerificationState.BROWSER_ONLY,
             MediaVerificationState.AUTH_REQUIRED,
+            MediaVerificationState.ACCESS_RESTRICTED,
+            MediaVerificationState.RATE_LIMITED,
             MediaVerificationState.EXPIRED,
             MediaVerificationState.UNSUPPORTED
         )

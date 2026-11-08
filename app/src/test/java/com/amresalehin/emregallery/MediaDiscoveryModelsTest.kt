@@ -230,9 +230,18 @@ class MediaDiscoveryModelsTest {
     @Test
     fun downloaderSessionDoesNotOfferTaggedAvatarsOrThumbnails() {
         DownloaderSession.startSession("https://example.com/gallery")
-        val avatar = mediaItem(metadata = mapOf("asset_role" to "AVATAR")).copy(id = "avatar")
-        val thumbnail = mediaItem(metadata = mapOf("asset_role" to "THUMBNAIL")).copy(id = "thumbnail")
-        val content = mediaItem().copy(id = "content")
+        val avatar = mediaItem(metadata = mapOf("asset_role" to "AVATAR")).copy(
+            id = "avatar",
+            url = "https://cdn.example.com/avatar.jpg"
+        )
+        val thumbnail = mediaItem(metadata = mapOf("asset_role" to "THUMBNAIL")).copy(
+            id = "thumbnail",
+            url = "https://cdn.example.com/thumbnail.jpg"
+        )
+        val content = mediaItem().copy(
+            id = "content",
+            url = "https://cdn.example.com/content.jpg"
+        )
 
         DownloaderSession.addDiscoveredItems(listOf(avatar, thumbnail, content))
 

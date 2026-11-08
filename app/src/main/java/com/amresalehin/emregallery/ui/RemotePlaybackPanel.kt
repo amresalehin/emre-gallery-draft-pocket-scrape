@@ -434,12 +434,21 @@ internal fun shouldAttachRemotePlaybackView(
 
 
 /**
+ * Returns true only when the view still references the player owned by the disposing session.
+ * Kept as a pure identity policy so it can be tested without inflating Media3 UI resources.
+ */
+internal fun shouldDetachRemotePlaybackPlayerView(
+    currentPlayer: Any?,
+    owningPlayer: Any?
+): Boolean = currentPlayer != null && currentPlayer === owningPlayer
+
+/**
  * Detaches a PlayerView only when it is still owned by the player being disposed.
  * Shared by AndroidView release and the dialog's disposal path so an old session
  * cannot detach a view that has already been rebound to a newer player.
  */
 internal fun detachRemotePlaybackPlayerView(view: PlayerView?, owningPlayer: Player?) {
-    if (view != null && owningPlayer != null && view.player === owningPlayer) {
+    if (view != null && shouldDetachRemotePlaybackPlayerView(view.player, owningPlayer)) {
         view.player = null
     }
 }

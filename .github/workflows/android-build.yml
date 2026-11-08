@@ -1,4 +1,5 @@
 name: Android build
+# Feature branches run the same unit-test and APK validation as the main development branches.
 
 on:
   push:

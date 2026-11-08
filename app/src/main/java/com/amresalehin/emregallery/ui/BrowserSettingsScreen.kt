@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -63,6 +65,7 @@ fun BrowserSettingsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                modifier = Modifier.statusBarsPadding(),
                 title = {
                     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         Text("Browser settings", fontWeight = FontWeight.SemiBold)
@@ -83,7 +86,7 @@ fun BrowserSettingsScreen(
         }
     ) { innerPadding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 18.dp),
+            modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 18.dp).navigationBarsPadding(),
             contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {

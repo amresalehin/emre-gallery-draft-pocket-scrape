@@ -178,7 +178,8 @@ class MediaCaptureEnginePreviewIsolationTest {
 
         val observerScript = MediaCaptureEngine.getMutationObserverScript()
         assertTrue(observerScript.contains("reportMedia(abs, assetRole)"))
-        assertTrue(observerScript.contains("report(node.src, imageAssetRole(node))"))
+        assertTrue(observerScript.contains("var imageRole = imageAssetRole(node)"))
+        assertTrue(observerScript.contains("report(node.src, imageRole)"))
         assertTrue(observerScript.contains("report(vsSrc, 'CONTENT_VIDEO')"))
     }
 

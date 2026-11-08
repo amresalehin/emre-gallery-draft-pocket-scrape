@@ -114,6 +114,16 @@ data class MediaAsset(
     }
 }
 
+
+/**
+ * A persisted remote asset paired with the resolver's current, evidence-backed direct-playback
+ * decision. Keeping both values lets UI callers retain provenance without re-deriving policy.
+ */
+data class ResolvedMediaAssetPlayback(
+    val asset: MediaAsset,
+    val resolution: PlaybackResolution.DirectRemote
+)
+
 @Entity(
     tableName = "media_assets",
     indices = [Index(value = ["bookmarkId", "canonicalResourceKey"], unique = true)]
@@ -214,6 +224,26 @@ class MediaAssetRepository(
         withContext(Dispatchers.IO) {
             ensureLegacyMigration()
             dao.getForBookmark(bookmarkId).mapNotNull { it.toDomainOrNull() }
+        }
+
+    /**
+     * Return only assets that currently satisfy the direct-playback evidence policy.
+     * Browser-only, embedded, presentation, expired, unverified, and access-restricted records
+     * remain persisted but are not exposed as direct-player options.
+     *
+     * Callers should request a fresh snapshot when playback is initiated so expiry and access
+     * state are evaluated at the time of use.
+     */
+    suspend fun playbackOptionsForBookmark(
+        bookmarkId: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): List<ResolvedMediaAssetPlayback> =
+        assetsForBookmark(bookmarkId).mapNotNull { asset ->
+            when (val resolution = PlaybackResolver.resolve(asset, nowMillis)) {
+                is PlaybackResolution.DirectRemote ->
+                    ResolvedMediaAssetPlayback(asset, resolution)
+                else -> null
+            }
         }
 
     suspend fun galleryAssetsForBookmark(bookmarkId: String): List<MediaAsset> =

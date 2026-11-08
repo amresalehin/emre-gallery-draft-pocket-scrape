@@ -355,6 +355,81 @@ class MediaAssetRepositoryTest {
     }
 
     @Test
+    fun playbackReadModelExposesOnlyResolverApprovedDirectVideoAndAudio() = runBlocking {
+        val bookmark = MediaInboxRepository(context).addBookmark(
+            title = "Saved media page",
+            url = "https://example.com/media-article"
+        )
+        val videoUrl = "https://cdn.example.com/stream.m3u8?token=keep%2Fexact"
+        val audioUrl = "https://cdn.example.com/audio.mp3?signature=preserve"
+
+        repository.upsertCandidates(
+            bookmark.id,
+            listOf(
+                candidate(
+                    remoteUrl = videoUrl,
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.CONTENT_VIDEO,
+                    mediaType = MediaCategory.VIDEOS,
+                    verificationState = MediaVerificationState.PLAYABLE_DIRECT,
+                    evidence = listOf(directEvidence("application/vnd.apple.mpegurl", 200))
+                ),
+                candidate(
+                    remoteUrl = audioUrl,
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.CONTENT_AUDIO,
+                    mediaType = MediaCategory.AUDIO,
+                    verificationState = MediaVerificationState.PLAYABLE_DIRECT,
+                    evidence = listOf(directEvidence("audio/mpeg; codecs=mp3", 206))
+                ),
+                candidate(
+                    remoteUrl = "https://cdn.example.com/verified-only.mp4",
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.CONTENT_VIDEO,
+                    mediaType = MediaCategory.VIDEOS,
+                    verificationState = MediaVerificationState.VERIFIED_RESOURCE,
+                    evidence = listOf(directEvidence("video/mp4", 200))
+                ),
+                candidate(
+                    remoteUrl = "https://cdn.example.com/poster.mp4",
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.VIDEO_POSTER,
+                    mediaType = MediaCategory.VIDEOS,
+                    verificationState = MediaVerificationState.PLAYABLE_DIRECT,
+                    evidence = listOf(directEvidence("video/mp4", 200))
+                ),
+                candidate(
+                    remoteUrl = "https://cdn.example.com/restricted.mp4",
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.CONTENT_VIDEO,
+                    mediaType = MediaCategory.VIDEOS,
+                    verificationState = MediaVerificationState.ACCESS_RESTRICTED,
+                    evidence = listOf(directEvidence("video/mp4", 403))
+                ),
+                candidate(
+                    remoteUrl = "https://cdn.example.com/missing-mime.mp4",
+                    sourcePageUrl = bookmark.sourceUrl,
+                    role = MediaAssetRole.CONTENT_VIDEO,
+                    mediaType = MediaCategory.VIDEOS,
+                    verificationState = MediaVerificationState.PLAYABLE_DIRECT,
+                    evidence = listOf(directEvidence(null, 200))
+                )
+            ),
+            nowMillis = 100L
+        )
+
+        val options = repository.playbackOptionsForBookmark(bookmark.id, nowMillis = 200L)
+        assertEquals(setOf(videoUrl, audioUrl), options.map { it.asset.remoteUrl }.toSet())
+        assertEquals(setOf(videoUrl, audioUrl), options.map { it.resolution.resourceUrl }.toSet())
+        val video = options.single { it.asset.remoteUrl == videoUrl }
+        val audio = options.single { it.asset.remoteUrl == audioUrl }
+        assertEquals(bookmark.sourceUrl, video.resolution.sourcePageUrl)
+        assertEquals(videoUrl, video.resolution.resourceUrl)
+        assertEquals("application/vnd.apple.mpegurl", video.resolution.mimeType)
+        assertEquals("audio/mpeg", audio.resolution.mimeType)
+    }
+
+    @Test
     fun bookmarkLookupUsesConservativeIdentityAndNeverCreatesOne() {
         val bookmarkRepository = MediaInboxRepository(context)
         val originalUrl = "HTTPS://EXAMPLE.COM:443/article?item=1"
@@ -437,6 +512,17 @@ class MediaAssetRepositoryTest {
         verificationState = verificationState,
         evidence = evidence,
         sourcePageUrls = sourcePageUrls
+    )
+
+    private fun directEvidence(
+        mimeType: String?,
+        statusCode: Int
+    ) = MediaDiscoveryEvidence(
+        source = MediaDiscoveryEvidenceSource.DIRECT_RESPONSE,
+        detail = "Playback read-model fixture",
+        observedMimeType = mimeType,
+        httpStatusCode = statusCode,
+        contentLengthBytes = 4096L
     )
 
     private class FailingWriteDao(

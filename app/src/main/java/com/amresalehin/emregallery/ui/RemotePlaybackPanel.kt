@@ -283,15 +283,11 @@ private fun RemotePlaybackDialog(
                 pausePlayback = { created.pause() },
                 resumePlayback = { created.play() }
             )
-            val observer = LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_PAUSE ->
-                        lifecycleController.onPause(created.playWhenReady)
-                    Lifecycle.Event.ON_RESUME ->
-                        lifecycleController.onResume(playbackFailed)
-                    else -> Unit
-                }
-            }
+            val observer = remotePlaybackLifecycleObserver(
+                controller = lifecycleController,
+                playWhenReady = { created.playWhenReady },
+                playbackFailed = { playbackFailed }
+            )
             lifecycleObserver = observer
             lifecycleOwner.lifecycle.addObserver(observer)
 

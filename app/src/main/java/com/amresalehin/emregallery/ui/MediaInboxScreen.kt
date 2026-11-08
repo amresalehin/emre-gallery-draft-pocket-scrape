@@ -67,6 +67,8 @@ import androidx.work.WorkInfo
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.amresalehin.emregallery.data.BrowserSession
+import com.amresalehin.emregallery.data.BrowserSettingsRepository
+import com.amresalehin.emregallery.data.BrowserStartupBehavior
 import com.amresalehin.emregallery.data.DownloadQueueManager
 import com.amresalehin.emregallery.data.MediaCategory
 import com.amresalehin.emregallery.data.MediaClassifier
@@ -2147,8 +2149,24 @@ fun FullScreenBrowserView(
     val context = LocalContext.current
     val inboxRepo = remember { MediaInboxRepository.getInstance(context) }
     val scope = rememberCoroutineScope()
+    val browserSettingsRepository = remember(context) {
+        BrowserSettingsRepository(context.applicationContext)
+    }
+    val restoredUrl = remember(browserSettingsRepository) {
+        browserSettingsRepository.getLastVisitedUrl()
+    }
+    val startupUrl = remember(initialUrl, restoredUrl) {
+        if (initialUrl.isNotBlank()) {
+            initialUrl
+        } else if (browserSettingsRepository.settings.value.startupBehavior == BrowserStartupBehavior.RESTORE_PREVIOUS_SESSION) {
+            restoredUrl
+        } else {
+            ""
+        }
+    }
 
-    var currentUrl by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var currentUrl by remember(initialUrl, startupUrl) { mutableStateOf(startupUrl) }
+    var showBrowserSettings by remember { mutableStateOf(false) }
     var pageTitle by remember { mutableStateOf("") }
     var discoveredItems by remember { mutableStateOf<List<ScrapedMediaItem>>(emptyList()) }
     var showDiscoveredMediaSheet by remember { mutableStateOf(false) }
@@ -2160,10 +2178,10 @@ fun FullScreenBrowserView(
 
     // Intercept back button when modal sheet is open or to close browser
     BackHandler {
-        if (showDiscoveredMediaSheet) {
-            showDiscoveredMediaSheet = false
-        } else {
-            onClose()
+        when {
+            showBrowserSettings -> showBrowserSettings = false
+            showDiscoveredMediaSheet -> showDiscoveredMediaSheet = false
+            else -> onClose()
         }
     }
 
@@ -2194,7 +2212,12 @@ fun FullScreenBrowserView(
             DirectBrowserView(
                 initialUrl = currentUrl,
                 onClose = onClose,
-                onUrlChange = { currentUrl = it },
+                onUrlChange = {
+                    currentUrl = it
+                    browserSettingsRepository.setLastVisitedUrl(it)
+                },
+                settingsRepository = browserSettingsRepository,
+                onOpenSettings = { showBrowserSettings = true },
                 onPageTitleChanged = { pageTitle = it },
                 onMediaExtracted = { item ->
                     discoveredItems = MediaNormalizer.deduplicateList(discoveredItems + item)
@@ -2207,6 +2230,14 @@ fun FullScreenBrowserView(
                     showDiscoveredMediaSheet = true
                 },
                 modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        if (showBrowserSettings) {
+            BrowserSettingsScreen(
+                repository = browserSettingsRepository,
+                onBack = { showBrowserSettings = false },
+                modifier = Modifier.fillMaxSize().zIndex(40f)
             )
         }
 

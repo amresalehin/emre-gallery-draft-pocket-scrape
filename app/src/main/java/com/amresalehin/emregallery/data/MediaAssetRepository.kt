@@ -169,7 +169,7 @@ interface MediaAssetDao {
 @Database(
     entities = [MediaAssetEntity::class],
     version = 1,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class MediaAssetDatabase : RoomDatabase() {
     abstract fun mediaAssetDao(): MediaAssetDao

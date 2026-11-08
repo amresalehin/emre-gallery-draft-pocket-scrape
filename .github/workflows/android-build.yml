@@ -67,3 +67,11 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload Room schema snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schema-${{ github.sha }}
+          path: app/schemas/
+          if-no-files-found: error
+          retention-days: 14

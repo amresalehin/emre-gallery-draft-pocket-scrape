@@ -53,20 +53,142 @@ class RemotePlaybackHttpClientTest {
     }
 
     @Test
-    fun doesNotAutomaticallyFollowRedirectResponses() = withServer { server ->
+    fun followsSafeRedirectsAndPreservesRangeRequests() = withServer { server ->
         server.enqueue(
             MockResponse()
                 .setResponseCode(302)
-                .addHeader("Location", "/next")
+                .addHeader("Location", "/stream")
         )
-        server.enqueue(MockResponse().setBody("must-not-be-requested"))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(206)
+                .addHeader("Content-Range", "bytes 0-3/4")
+                .setBody("data")
+        )
 
-        val response = testClient(server).newCall(
-            Request.Builder().url(server.url("/start")).build()
-        ).execute().use { it.code }
+        val request = Request.Builder()
+            .url(server.url("/start"))
+            .header("Range", "bytes=0-3")
+            .header("Cookie", "manual=secret")
+            .header("Authorization", "Bearer secret")
+            .header("Referer", "https://page.example/article")
+            .build()
+        val responseCode = testClient(server).newCall(request).execute().use { it.code }
 
-        assertEquals(302, response)
+        assertEquals(206, responseCode)
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals("/start", first.path)
+        assertEquals("/stream", second.path)
+        assertEquals("bytes=0-3", second.getHeader("Range"))
+        assertNull(first.getHeader("Cookie"))
+        assertNull(first.getHeader("Authorization"))
+        assertNull(first.getHeader("Referer"))
+        assertNull(second.getHeader("Cookie"))
+        assertNull(second.getHeader("Authorization"))
+        assertNull(second.getHeader("Referer"))
+    }
+
+    @Test
+    fun rejectsRedirectToDisallowedDestinationBeforeConnecting() = withServer { server ->
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .addHeader("Location", "https://127.0.0.1/private")
+        )
+        val allowedHost = server.url("/").host
+        val client = RemotePlaybackHttpClient.buildClient(
+            dns = object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> =
+                    if (hostname == allowedHost) {
+                        listOf(InetAddress.getByName("127.0.0.1"))
+                    } else {
+                        throw UnknownHostException("Unexpected DNS lookup")
+                    }
+            },
+            urlValidator = { it.host == allowedHost }
+        )
+
+        val failure = runCatching {
+            client.newCall(Request.Builder().url(server.url("/start")).build())
+                .execute().use { }
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun rejectsRedirectLoopsWithoutRepeatingARequest() = withServer { server ->
+        server.enqueue(
+            MockResponse().setResponseCode(302).addHeader("Location", "/next")
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(302).addHeader("Location", "/start")
+        )
+
+        val failure = runCatching {
+            testClient(server).newCall(
+                Request.Builder().url(server.url("/start")).build()
+            ).execute().use { }
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun enforcesTheRedirectLimit() = withServer { server ->
+        repeat(6) { index ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(302)
+                    .addHeader("Location", "/hop${index + 1}")
+            )
+        }
+
+        val failure = runCatching {
+            testClient(server).newCall(
+                Request.Builder().url(server.url("/start")).build()
+            ).execute().use { }
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertEquals(6, server.requestCount)
+    }
+
+    @Test
+    fun rejectsHttpsToHttpRedirectDowngrade() {
+        val secureUrl = Request.Builder()
+            .url("https://media.example/video")
+            .build()
+            .url
+
+        val target = RemotePlaybackHttpClient.resolveRedirectTarget(
+            currentUrl = secureUrl,
+            location = "http://media.example/video",
+            urlValidator = { true }
+        )
+
+        assertNull(target)
+    }
+
+    @Test
+    fun rejectsPrivateIpRedirectTargets() {
+        val secureUrl = Request.Builder()
+            .url("https://media.example/video")
+            .build()
+            .url
+
+        val target = RemotePlaybackHttpClient.resolveRedirectTarget(
+            currentUrl = secureUrl,
+            location = "https://127.0.0.1/private",
+            urlValidator = {
+                PageFetchUrlPolicy.parseAllowedUrl(it.toString()) != null
+            }
+        )
+
+        assertNull(target)
     }
 
     @Test

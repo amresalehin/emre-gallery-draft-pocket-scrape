@@ -72,7 +72,10 @@ class RemotePlaybackHttpClientTest {
     @Test
     fun rejectsDnsAnswersContainingPrivateAddressesBeforeConnecting() {
         val privateDns = PublicInternetDns(
-            Dns { listOf(InetAddress.getByName("127.0.0.1")) }
+            object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> =
+                    listOf(InetAddress.getByName("127.0.0.1"))
+            }
         )
         val client = RemotePlaybackHttpClient.buildClient(dns = privateDns)
 
@@ -92,9 +95,11 @@ class RemotePlaybackHttpClientTest {
     fun rejectsPrivateIpLiteralBeforeDnsLookup() {
         var dnsLookups = 0
         val client = RemotePlaybackHttpClient.buildClient(
-            dns = Dns {
-                dnsLookups += 1
-                listOf(InetAddress.getByName("127.0.0.1"))
+            dns = object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> {
+                    dnsLookups += 1
+                    return listOf(InetAddress.getByName("127.0.0.1"))
+                }
             }
         )
 
@@ -109,12 +114,13 @@ class RemotePlaybackHttpClientTest {
     }
 
     private fun testClient(server: MockWebServer) = RemotePlaybackHttpClient.buildClient(
-        dns = Dns { hostname ->
-            if (hostname == server.url("/").host) {
-                listOf(InetAddress.getByName("127.0.0.1"))
-            } else {
-                Dns.SYSTEM.lookup(hostname)
-            }
+        dns = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> =
+                if (hostname == server.url("/").host) {
+                    listOf(InetAddress.getByName("127.0.0.1"))
+                } else {
+                    Dns.SYSTEM.lookup(hostname)
+                }
         },
         urlValidator = { true }
     )

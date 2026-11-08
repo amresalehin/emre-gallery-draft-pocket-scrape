@@ -307,9 +307,7 @@ private fun RemotePlaybackDialog(
             lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
             activePlayer?.let { failedPlayer ->
                 playerListener?.let { failedPlayer.removeListener(it) }
-                playerViewState.value?.let { view ->
-                    if (view.player === failedPlayer) view.player = null
-                }
+                detachRemotePlaybackPlayerView(playerViewState.value, failedPlayer)
                 failedPlayer.release()
             }
             activePlayer = null
@@ -323,9 +321,7 @@ private fun RemotePlaybackDialog(
             lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
             activePlayer?.let { releasingPlayer ->
                 playerListener?.let { releasingPlayer.removeListener(it) }
-                playerViewState.value?.let { view ->
-                    if (view.player === releasingPlayer) view.player = null
-                }
+                detachRemotePlaybackPlayerView(playerViewState.value, releasingPlayer)
                 if (playerState.value === releasingPlayer) {
                     playerState.value = null
                 }
@@ -394,7 +390,7 @@ private fun RemotePlaybackDialog(
                             if (playerViewState.value !== view) playerViewState.value = view
                         },
                         onRelease = { view ->
-                            if (view.player === activePlayer) view.player = null
+                            detachRemotePlaybackPlayerView(view, activePlayer)
                             if (playerViewState.value === view) playerViewState.value = null
                         },
                         modifier = Modifier
@@ -435,3 +431,15 @@ internal fun shouldAttachRemotePlaybackView(
     hasPlayer: Boolean,
     playbackFailed: Boolean
 ): Boolean = hasPlayer && !playbackFailed
+
+
+/**
+ * Detaches a PlayerView only when it is still owned by the player being disposed.
+ * Shared by AndroidView release and the dialog's disposal path so an old session
+ * cannot detach a view that has already been rebound to a newer player.
+ */
+internal fun detachRemotePlaybackPlayerView(view: PlayerView?, owningPlayer: Player?) {
+    if (view != null && owningPlayer != null && view.player === owningPlayer) {
+        view.player = null
+    }
+}

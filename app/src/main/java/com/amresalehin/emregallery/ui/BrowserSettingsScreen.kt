@@ -25,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -106,11 +107,23 @@ fun BrowserSettingsScreen(
                         BrowserSearchEngine.GOOGLE to "Google",
                         BrowserSearchEngine.BING to "Bing",
                         BrowserSearchEngine.DUCKDUCKGO to "DuckDuckGo",
-                        BrowserSearchEngine.WIKIPEDIA to "Wikipedia"
+                        BrowserSearchEngine.CUSTOM to "Custom"
                     ),
                     onSelected = repository::setSearchEngine,
                     testTag = "browser_search_engine"
                 )
+            }
+            if (settings.searchEngine == BrowserSearchEngine.CUSTOM) {
+                item {
+                    OutlinedTextField(
+                        value = settings.customSearchUrl,
+                        onValueChange = repository::setCustomSearchUrl,
+                        modifier = Modifier.fillMaxWidth().testTag("browser_custom_search_url"),
+                        singleLine = true,
+                        label = { Text("Search URL template") },
+                        supportingText = { Text("Use %s where the search terms should be inserted.") }
+                    )
+                }
             }
             item {
                 BrowserChoiceRow(
@@ -143,6 +156,20 @@ fun BrowserSettingsScreen(
                     title = "Tab management",
                     value = "Single-tab mode",
                     detail = "Background tabs, restore closed tabs, tab grouping, per-tab desktop mode, pull-to-refresh and swipe-between-tabs are not supported by the current browser yet."
+                )
+            }
+            item {
+                BrowserInfoRow(
+                    title = "Close confirmation",
+                    value = "Not applicable",
+                    detail = "The current browser keeps one active tab, so there is no close-all-tabs action."
+                )
+            }
+            item {
+                BrowserInfoRow(
+                    title = "Inactive tab discard",
+                    value = "Not applicable",
+                    detail = "Automatic tab discarding will be configurable when multiple browser tabs are supported."
                 )
             }
             item {
@@ -248,6 +275,27 @@ fun BrowserSettingsScreen(
                     options = listOf(50, 75, 90, 100, 110, 125, 150).map { it to "$it%" },
                     onSelected = repository::setWebsiteInitialScale,
                     testTag = "browser_website_zoom"
+                )
+            }
+            item {
+                BrowserInfoRow(
+                    title = "Theme",
+                    value = "Follows Emre",
+                    detail = "The browser inherits Emre's Light, Dark or System appearance setting."
+                )
+            }
+            item {
+                BrowserInfoRow(
+                    title = "Website favicon and page title",
+                    value = "Not shown",
+                    detail = "The current compact toolbar does not expose these page-identity elements yet."
+                )
+            }
+            item {
+                BrowserInfoRow(
+                    title = "Full-screen browsing",
+                    value = "Not available",
+                    detail = "Immersive browsing and hiding Android system bars are not implemented yet."
                 )
             }
             item {

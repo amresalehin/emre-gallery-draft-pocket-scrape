@@ -8,7 +8,10 @@ import com.amresalehin.emregallery.data.BrowserSettingsRepository
 import com.amresalehin.emregallery.data.BrowserStartupBehavior
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class BrowserSettingsRepositoryTest {
     @Test
     fun defaultsToGoogleAndTopToolbar() {

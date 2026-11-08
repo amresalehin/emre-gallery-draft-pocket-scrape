@@ -86,7 +86,7 @@ fun DirectBrowserView(
     val startUrl = remember(initialUrl, browserSettings.searchEngine) {
         val trimmed = initialUrl.trim()
         if (trimmed.isNotBlank()) {
-            MediaClassifier.formatQueryOrUrl(trimmed, browserSettings.searchEngine)
+            MediaClassifier.formatQueryOrUrl(trimmed, browserSettings.searchEngine, browserSettings.customSearchUrl)
         } else {
             "" // Empty home page by default
         }
@@ -141,7 +141,7 @@ fun DirectBrowserView(
     }
 
     fun scanCurrentPageDOM(wv: WebView?) {
-        if (!browserSettings.mediaDiscoveryEnabled || wv == null) return
+        if (wv == null) return
         val current = wv.url ?: return
         if (current.isBlank() || current == "about:blank" || currentUrl.isBlank()) return
 

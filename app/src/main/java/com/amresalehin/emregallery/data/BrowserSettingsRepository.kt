@@ -19,6 +19,7 @@ enum class BrowserAddressBarPosition(val label: String) {
 data class BrowserSettingsState(
     val startupBehavior: BrowserStartupBehavior = BrowserStartupBehavior.HOMEPAGE,
     val searchEngine: BrowserSearchEngine = BrowserSearchEngine.GOOGLE,
+    val customSearchUrl: String = "https://www.google.com/search?q=%s",
     val addressBarPosition: BrowserAddressBarPosition = BrowserAddressBarPosition.TOP,
     val showLoadingProgress: Boolean = true,
     val showSecurityIndicator: Boolean = true,
@@ -68,6 +69,8 @@ class BrowserSettingsRepository(context: Context) {
         return BrowserSettingsState(
             startupBehavior = startup,
             searchEngine = engine,
+            customSearchUrl = preferences.getString(KEY_CUSTOM_SEARCH_URL, "https://www.google.com/search?q=%s")
+                ?: "https://www.google.com/search?q=%s",
             addressBarPosition = position,
             showLoadingProgress = preferences.getBoolean(KEY_PROGRESS, true),
             showSecurityIndicator = preferences.getBoolean(KEY_SECURITY, true),
@@ -97,6 +100,12 @@ class BrowserSettingsRepository(context: Context) {
 
     fun setSearchEngine(value: BrowserSearchEngine) =
         update({ it.copy(searchEngine = value) }) { putString(KEY_SEARCH_ENGINE, value.name) }
+
+    fun setCustomSearchUrl(value: String) {
+        val normalized = value.trim().takeIf { it.startsWith("https://") && it.contains("%s") }
+            ?: "https://www.google.com/search?q=%s"
+        update({ it.copy(customSearchUrl = normalized) }) { putString(KEY_CUSTOM_SEARCH_URL, normalized) }
+    }
 
     fun setAddressBarPosition(value: BrowserAddressBarPosition) =
         update({ it.copy(addressBarPosition = value) }) { putString(KEY_ADDRESS_BAR, value.name) }
@@ -149,6 +158,7 @@ class BrowserSettingsRepository(context: Context) {
         const val PREFERENCES_NAME = "emre_browser_settings"
         const val KEY_STARTUP = "startup_behavior"
         const val KEY_SEARCH_ENGINE = "search_engine"
+        const val KEY_CUSTOM_SEARCH_URL = "custom_search_url"
         const val KEY_ADDRESS_BAR = "address_bar_position"
         const val KEY_PROGRESS = "show_loading_progress"
         const val KEY_SECURITY = "show_security_indicator"

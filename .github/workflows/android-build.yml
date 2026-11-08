@@ -7,6 +7,7 @@ on:
       - Develop
       - 'integration/**'
       - 'fix/**'
+      - 'feature/**'
       - 'chore/**'
   pull_request:
     branches:
@@ -14,6 +15,7 @@ on:
       - Develop
       - 'integration/**'
       - 'fix/**'
+      - 'feature/**'
       - 'chore/**'
   workflow_dispatch:
 

@@ -1556,7 +1556,11 @@ object MediaClassifier {
         return results
     }
 
-    fun formatQueryOrUrl(input: String, searchEngine: BrowserSearchEngine = BrowserSearchEngine.DUCKDUCKGO): String {
+    fun formatQueryOrUrl(
+        input: String,
+        searchEngine: BrowserSearchEngine = BrowserSearchEngine.DUCKDUCKGO,
+        customSearchUrl: String? = null
+    ): String {
         val trimmed = input.trim()
         if (trimmed.isBlank()) return ""
         return if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
@@ -1564,7 +1568,13 @@ object MediaClassifier {
         } else if (trimmed.contains(".") && !trimmed.contains(" ") && trimmed.length > 3) {
             "https://$trimmed"
         } else {
-            "${searchEngine.searchUrl}${URLEncoder.encode(trimmed, "UTF-8")}"
+            val encoded = URLEncoder.encode(trimmed, "UTF-8")
+            if (searchEngine == BrowserSearchEngine.CUSTOM) {
+                val template = customSearchUrl?.takeIf { it.startsWith("https://", ignoreCase = true) && it.contains("%s") }
+                template?.replace("%s", encoded) ?: "https://www.google.com/search?q=$encoded"
+            } else {
+                "${searchEngine.searchUrl}$encoded"
+            }
         }
     }
 }
@@ -1573,7 +1583,8 @@ enum class BrowserSearchEngine(val label: String, val shortLabel: String, val se
     DUCKDUCKGO("DuckDuckGo", "DDG", "https://duckduckgo.com/?q="),
     GOOGLE("Google", "Google", "https://www.google.com/search?q="),
     BING("Bing", "Bing", "https://www.bing.com/search?q="),
-    WIKIPEDIA("Wikipedia", "Wiki", "https://en.wikipedia.org/wiki/Special:Search?search=")
+    WIKIPEDIA("Wikipedia", "Wiki", "https://en.wikipedia.org/wiki/Special:Search?search="),
+    CUSTOM("Custom", "Custom", "")
 }
 
 data class ClassificationResult(

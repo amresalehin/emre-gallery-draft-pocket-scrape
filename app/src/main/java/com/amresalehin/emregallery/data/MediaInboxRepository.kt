@@ -243,6 +243,19 @@ class MediaInboxRepository(private val context: Context) {
         return bookmarkStack
     }
 
+    /**
+     * Finds an already-saved bookmark by its conservative source identity.
+     * Discovery must never create a bookmark as a side effect.
+     */
+    @Synchronized
+    fun findBookmarkBySourceUrl(sourceUrl: String): MediaInboxStack? {
+        val cleanUrl = sourceUrl.trim()
+        if (cleanUrl.isEmpty()) return null
+        return _stacks.value.firstOrNull {
+            BookmarkUrlIdentity.areSameSource(it.sourceUrl, cleanUrl)
+        }
+    }
+
     @Synchronized
     fun updateStack(updated: MediaInboxStack) {
         val current = _stacks.value

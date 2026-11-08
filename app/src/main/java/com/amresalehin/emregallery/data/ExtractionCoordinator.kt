@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.net.URL
@@ -151,6 +152,7 @@ class ExtractionCoordinator(private val context: Context) {
                     )
 
                     updateItems(listOf(directItem), title = derivedTitle, phase = ExtractionPhase.COMPLETED)
+                    persistDiscoveredAssets(requestContext.url, _state.value.discoveryCandidates)
                     finishSuccess(itemsMap.size)
                     return@launch
                 }
@@ -280,6 +282,9 @@ class ExtractionCoordinator(private val context: Context) {
                             }
                         }
                     }
+                    // Persist only when this source page already has a durable bookmark.
+                    // A persistence failure must never turn successful extraction into failure.
+                    persistDiscoveredAssets(requestContext.url, _state.value.discoveryCandidates)
                     finishSuccess(itemsMap.size)
                     return@launch
                 }
@@ -308,6 +313,36 @@ class ExtractionCoordinator(private val context: Context) {
                     phase = ExtractionPhase.ERROR,
                     statusMessage = "Extraction failed: $err",
                     errorMessage = err
+                )
+            }
+        }
+    }
+
+    private suspend fun persistDiscoveredAssets(
+        sourcePageUrl: String,
+        candidates: List<MediaDiscoveryCandidate>
+    ) {
+        if (candidates.isEmpty()) return
+
+        withContext(Dispatchers.IO) {
+            val bookmark = try {
+                MediaInboxRepository.getInstance(context).findBookmarkBySourceUrl(sourcePageUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w("ExtractionCoordinator", "Could not resolve saved bookmark for media persistence", error)
+                null
+            } ?: return@withContext
+
+            try {
+                MediaAssetRepository.getInstance(context).upsertCandidates(bookmark.id, candidates)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(
+                    "ExtractionCoordinator",
+                    "Media assets could not be persisted; extraction remains successful",
+                    error
                 )
             }
         }

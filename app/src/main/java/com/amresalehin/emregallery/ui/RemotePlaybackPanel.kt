@@ -376,8 +376,10 @@ private fun RemotePlaybackDialog(
                     }
                 }
 
-                if (player != null) {
-                    val activePlayer = player
+                // A failed native player is no longer useful; removing AndroidView invokes onRelease,
+                // which detaches the PlayerView before the dialog's player is disposed.
+                if (shouldAttachRemotePlaybackView(player != null, playbackFailed)) {
+                    val activePlayer = requireNotNull(player)
                     AndroidView(
                         factory = { viewContext ->
                             PlayerView(viewContext).apply {
@@ -424,3 +426,12 @@ private fun RemotePlaybackDialog(
         }
     }
 }
+
+/**
+ * Keep the native PlayerView attached only while a live player has not entered a terminal error
+ * state. Removing AndroidView lets its onRelease callback detach the view from ExoPlayer.
+ */
+internal fun shouldAttachRemotePlaybackView(
+    hasPlayer: Boolean,
+    playbackFailed: Boolean
+): Boolean = hasPlayer && !playbackFailed

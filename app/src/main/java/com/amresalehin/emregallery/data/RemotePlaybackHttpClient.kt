@@ -4,7 +4,9 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.HttpUrl
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import java.io.IOException
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
@@ -59,57 +61,59 @@ object RemotePlaybackHttpClient {
         .followRedirects(false)
         .followSslRedirects(false)
         .retryOnConnectionFailure(false)
-        .addInterceptor { chain ->
-            var request = chain.request()
-            val visitedUrls = mutableSetOf<String>()
-            var redirectsFollowed = 0
-
-            while (true) {
-                if (!urlValidator(request.url)) {
-                    throw IOException("Blocked remote playback destination")
-                }
-                if (!visitedUrls.add(request.url.toString())) {
-                    throw IOException("Remote playback redirect loop detected")
-                }
-
-                // Do not allow a caller or Media3 request property to reintroduce browser credentials.
-                val safeRequest = request.newBuilder()
-                    .removeHeader("Cookie")
-                    .removeHeader("Cookie2")
-                    .removeHeader("Authorization")
-                    .removeHeader("Proxy-Authorization")
-                    .removeHeader("Referer")
-                    .header("User-Agent", USER_AGENT)
-                    .build()
-
-                val response = chain.proceed(safeRequest)
-                if (response.code !in REDIRECT_CODES ||
-                    request.method !in REDIRECTABLE_METHODS
-                ) {
-                    return@addInterceptor response
-                }
-
-                val nextUrl = resolveRedirectTarget(
-                    currentUrl = request.url,
-                    location = response.header("Location"),
-                    urlValidator = urlValidator
-                )
-                if (nextUrl == null) {
-                    response.close()
-                    throw IOException("Blocked remote playback redirect")
-                }
-                if (redirectsFollowed >= MAX_REDIRECTS ||
-                    nextUrl.toString() in visitedUrls
-                ) {
-                    response.close()
-                    throw IOException("Remote playback redirect limit or loop detected")
-                }
-
-                // Close the previous response before reusing the application interceptor chain.
-                response.close()
-                request = request.newBuilder().url(nextUrl).build()
-                redirectsFollowed += 1
-            }
-        }
+        .addInterceptor { chain -> executeRedirectChain(chain, urlValidator) }
         .build()
+
+    private fun executeRedirectChain(
+        chain: Interceptor.Chain,
+        urlValidator: (HttpUrl) -> Boolean
+    ): Response {
+        var request = chain.request()
+        val visitedUrls = mutableSetOf<String>()
+        var redirectsFollowed = 0
+
+        while (true) {
+            if (!urlValidator(request.url)) {
+                throw IOException("Blocked remote playback destination")
+            }
+            if (!visitedUrls.add(request.url.toString())) {
+                throw IOException("Remote playback redirect loop detected")
+            }
+
+            // Do not allow a caller or Media3 request property to reintroduce browser credentials.
+            val safeRequest = request.newBuilder()
+                .removeHeader("Cookie")
+                .removeHeader("Cookie2")
+                .removeHeader("Authorization")
+                .removeHeader("Proxy-Authorization")
+                .removeHeader("Referer")
+                .header("User-Agent", USER_AGENT)
+                .build()
+
+            val response = chain.proceed(safeRequest)
+            if (response.code !in REDIRECT_CODES || request.method !in REDIRECTABLE_METHODS) {
+                return response
+            }
+
+            val nextUrl = resolveRedirectTarget(
+                currentUrl = request.url,
+                location = response.header("Location"),
+                urlValidator = urlValidator
+            )
+            if (nextUrl == null) {
+                response.close()
+                throw IOException("Blocked remote playback redirect")
+            }
+            if (redirectsFollowed >= MAX_REDIRECTS || nextUrl.toString() in visitedUrls) {
+                response.close()
+                throw IOException("Remote playback redirect limit or loop detected")
+            }
+
+            // Close the previous response before reusing the application interceptor chain.
+            response.close()
+            request = request.newBuilder().url(nextUrl).build()
+            redirectsFollowed += 1
+        }
+    }
+
 }

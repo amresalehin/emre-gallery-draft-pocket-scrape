@@ -2,6 +2,8 @@ package com.amresalehin.emregallery.data
 
 import okhttp3.Dns
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
@@ -87,6 +89,25 @@ class RemotePlaybackHttpClientTest {
         assertNull(second.getHeader("Cookie"))
         assertNull(second.getHeader("Authorization"))
         assertNull(second.getHeader("Referer"))
+    }
+
+    @Test
+    fun doesNotFollowRedirectsForMethodsOutsideGetAndHead() = withServer { server ->
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .addHeader("Location", "/should-not-be-requested")
+        )
+
+        val request = Request.Builder()
+            .url(server.url("/submit"))
+            .post("payload".toRequestBody("text/plain".toMediaType()))
+            .build()
+        val responseCode = testClient(server).newCall(request).execute().use { it.code }
+
+        assertEquals(302, responseCode)
+        assertEquals(1, server.requestCount)
+        assertEquals("POST", server.takeRequest().method)
     }
 
     @Test

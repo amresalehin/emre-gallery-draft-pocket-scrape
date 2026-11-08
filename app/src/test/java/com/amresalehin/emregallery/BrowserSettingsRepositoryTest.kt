@@ -26,6 +26,18 @@ class BrowserSettingsRepositoryTest {
         assertEquals(BrowserStartupBehavior.HOMEPAGE, settings.startupBehavior)
     }
 
+
+    @Test
+    fun customSearchUrlReplacesTheSearchPlaceholder() {
+        val actual = com.amresalehin.emregallery.data.MediaClassifier.formatQueryOrUrl(
+            "hello world",
+            BrowserSearchEngine.CUSTOM,
+            "https://search.example/find?term=%s"
+        )
+
+        assertEquals("https://search.example/find?term=hello+world", actual)
+    }
+
     @Test
     fun persistsSearchEngineAndToolbarPosition() {
         val context = ApplicationProvider.getApplicationContext<Context>()

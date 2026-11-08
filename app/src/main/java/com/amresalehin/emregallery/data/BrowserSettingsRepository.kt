@@ -102,8 +102,7 @@ class BrowserSettingsRepository(context: Context) {
         update({ it.copy(searchEngine = value) }) { putString(KEY_SEARCH_ENGINE, value.name) }
 
     fun setCustomSearchUrl(value: String) {
-        val normalized = value.trim().takeIf { it.startsWith("https://") && it.contains("%s") }
-            ?: "https://www.google.com/search?q=%s"
+        val normalized = value.trim()
         update({ it.copy(customSearchUrl = normalized) }) { putString(KEY_CUSTOM_SEARCH_URL, normalized) }
     }
 

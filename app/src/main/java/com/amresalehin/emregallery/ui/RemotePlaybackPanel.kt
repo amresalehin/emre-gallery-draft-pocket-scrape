@@ -239,11 +239,27 @@ fun RemotePlaybackPanel(
     }
 }
 
+/**
+ * Owns one remote player for the lifetime of its dialog.
+ *
+ * The injectable factories keep Compose lifecycle behavior testable without starting network
+ * playback; production defaults retain the dedicated remote transport and native Media3 views.
+ */
 @Composable
-private fun RemotePlaybackDialog(
+internal fun RemotePlaybackDialog(
     playback: ResolvedMediaAssetPlayback,
     onDismiss: () -> Unit,
-    onOpenSourcePage: (() -> Unit)?
+    onOpenSourcePage: (() -> Unit)?,
+    playerFactory: (Context) -> ExoPlayer = { appContext ->
+        val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
+            .setDataSourceFactory(RemotePlaybackHttpClient.dataSourceFactory())
+        ExoPlayer.Builder(appContext)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build()
+    },
+    preparePlayer: (ExoPlayer) -> Unit = { it.prepare() },
+    releasePlayer: (ExoPlayer) -> Unit = { it.release() },
+    playerViewFactory: (Context) -> PlayerView = { PlayerView(it) }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -266,12 +282,7 @@ private fun RemotePlaybackDialog(
         playbackFailed = false
 
         try {
-            val appContext = context.applicationContext
-            val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
-                .setDataSourceFactory(RemotePlaybackHttpClient.dataSourceFactory())
-            val created = ExoPlayer.Builder(appContext)
-                .setMediaSourceFactory(mediaSourceFactory)
-                .build()
+            val created = playerFactory(context.applicationContext)
             activePlayer = created
             created.setMediaItem(RemotePlaybackMediaItemFactory.create(playback))
             created.repeatMode = Player.REPEAT_MODE_OFF
@@ -299,7 +310,7 @@ private fun RemotePlaybackDialog(
             val shouldStartImmediately = lifecycleOwner.lifecycle.currentState
                 .isAtLeast(Lifecycle.State.RESUMED)
             created.playWhenReady = shouldStartImmediately
-            created.prepare()
+            preparePlayer(created)
             if (!shouldStartImmediately) {
                 lifecycleController.onPause(playWhenReady = true)
             }
@@ -309,7 +320,7 @@ private fun RemotePlaybackDialog(
             activePlayer?.let { failedPlayer ->
                 playerListener?.let { failedPlayer.removeListener(it) }
                 detachRemotePlaybackPlayerView(playerViewState.value, failedPlayer)
-                failedPlayer.release()
+                releasePlayer(failedPlayer)
             }
             activePlayer = null
             playerListener = null
@@ -326,7 +337,7 @@ private fun RemotePlaybackDialog(
                 if (playerState.value === releasingPlayer) {
                     playerState.value = null
                 }
-                releasingPlayer.release()
+                releasePlayer(releasingPlayer)
             }
         }
     }
@@ -381,7 +392,7 @@ private fun RemotePlaybackDialog(
                         owner = activePlayer,
                         viewState = playerViewState,
                         factory = { viewContext ->
-                            PlayerView(viewContext).apply {
+                            playerViewFactory(viewContext).apply {
                                 useController = true
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                             }

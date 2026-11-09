@@ -4,24 +4,36 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 /**
- * Preserves the user's play intent across lifecycle pauses without autoplaying a manually paused
- * player or restarting a resource after a playback error.
+ * Owns lifecycle pause/resume and terminal failure state for one remote playback session.
+ *
+ * The play intent is captured before lifecycle pause. A terminal player error clears any pending
+ * resume request and prevents later lifecycle events from restarting the failed resource.
  */
 internal class RemotePlaybackLifecycleController(
     private val pausePlayback: () -> Unit,
-    private val resumePlayback: () -> Unit
+    private val resumePlayback: () -> Unit,
+    private val onPlaybackFailed: () -> Unit = {}
 ) {
     private var pausedByLifecycle = false
     private var shouldResume = false
+    private var playbackFailed = false
+
+    fun onPlaybackError() {
+        if (playbackFailed) return
+        playbackFailed = true
+        shouldResume = false
+        if (!pausedByLifecycle) pausePlayback()
+        onPlaybackFailed()
+    }
 
     fun onPause(playWhenReady: Boolean) {
         if (pausedByLifecycle) return
         pausedByLifecycle = true
-        shouldResume = playWhenReady
-        pausePlayback()
+        shouldResume = playWhenReady && !playbackFailed
+        if (!playbackFailed) pausePlayback()
     }
 
-    fun onResume(playbackFailed: Boolean) {
+    fun onResume() {
         if (!pausedByLifecycle) return
         if (shouldResume && !playbackFailed) {
             resumePlayback()
@@ -34,17 +46,16 @@ internal class RemotePlaybackLifecycleController(
 /**
  * Bridges Android lifecycle events to the playback intent controller.
  *
- * Values are supplied as lambdas so ON_PAUSE observes the player's current intent and ON_RESUME
- * observes the latest failure state, rather than values captured when the observer was created.
+ * The play intent is supplied as a lambda so ON_PAUSE observes the player's current value,
+ * including the true play intent retained while Media3 is buffering.
  */
 internal fun remotePlaybackLifecycleObserver(
     controller: RemotePlaybackLifecycleController,
-    playWhenReady: () -> Boolean,
-    playbackFailed: () -> Boolean
+    playWhenReady: () -> Boolean
 ): LifecycleEventObserver = LifecycleEventObserver { _, event ->
     when (event) {
         Lifecycle.Event.ON_PAUSE -> controller.onPause(playWhenReady())
-        Lifecycle.Event.ON_RESUME -> controller.onResume(playbackFailed())
+        Lifecycle.Event.ON_RESUME -> controller.onResume()
         else -> Unit
     }
 }

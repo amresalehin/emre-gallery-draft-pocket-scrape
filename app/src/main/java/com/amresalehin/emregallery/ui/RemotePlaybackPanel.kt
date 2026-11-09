@@ -270,23 +270,22 @@ private fun RemotePlaybackDialog(
             created.setMediaItem(RemotePlaybackMediaItemFactory.create(playback))
             created.repeatMode = Player.REPEAT_MODE_OFF
 
+            val lifecycleController = RemotePlaybackLifecycleController(
+                pausePlayback = { created.pause() },
+                resumePlayback = { created.play() },
+                onPlaybackFailed = { playbackFailed = true }
+            )
             val listener = object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
-                    playbackFailed = true
-                    created.pause()
+                    lifecycleController.onPlaybackError()
                 }
             }
             playerListener = listener
             created.addListener(listener)
 
-            val lifecycleController = RemotePlaybackLifecycleController(
-                pausePlayback = { created.pause() },
-                resumePlayback = { created.play() }
-            )
             val observer = remotePlaybackLifecycleObserver(
                 controller = lifecycleController,
-                playWhenReady = { created.playWhenReady },
-                playbackFailed = { playbackFailed }
+                playWhenReady = { created.playWhenReady }
             )
             lifecycleObserver = observer
             lifecycleOwner.lifecycle.addObserver(observer)

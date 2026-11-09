@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ import com.amresalehin.emregallery.data.RemotePlaybackHttpClient
 import com.amresalehin.emregallery.data.RemotePlaybackMediaItemFactory
 import com.amresalehin.emregallery.data.ResolvedMediaAssetPlayback
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -83,6 +85,19 @@ fun RemotePlaybackPanel(
     var isLoading by remember(bookmarkId) { mutableStateOf(true) }
     var selectedPlayback by remember(bookmarkId) {
         mutableStateOf<ResolvedMediaAssetPlayback?>(null)
+    }
+    val playbackRequestGate = remember { PlaybackOptionsRequestGate() }
+    val playbackRefreshJob = remember { mutableStateOf<Job?>(null) }
+    val latestOriginalSourceUrl = rememberUpdatedState(originalSourceUrl)
+    val latestOnOpenBrowser = rememberUpdatedState(onOpenBrowser)
+
+    DisposableEffect(bookmarkId) {
+        playbackRequestGate.activate(bookmarkId)
+        onDispose {
+            playbackRequestGate.invalidate(bookmarkId)
+            playbackRefreshJob.value?.cancel()
+            playbackRefreshJob.value = null
+        }
     }
 
     LaunchedEffect(bookmarkId, repository) {
@@ -155,7 +170,10 @@ fun RemotePlaybackPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                scope.launch {
+                                val requestId = playbackRequestGate.begin(bookmarkId)
+                                    ?: return@clickable
+                                playbackRefreshJob.value?.cancel()
+                                playbackRefreshJob.value = scope.launch {
                                     val refreshed = try {
                                         repository.playbackOptionsForBookmark(bookmarkId)
                                             .firstOrNull { it.asset.id == option.asset.id }
@@ -163,6 +181,12 @@ fun RemotePlaybackPanel(
                                         throw cancelled
                                     } catch (_: Exception) {
                                         null
+                                    }
+
+                                    // A newer selection or bookmark navigation supersedes this
+                                    // result. Never open a stale page or player from an old request.
+                                    if (!playbackRequestGate.isCurrent(bookmarkId, requestId)) {
+                                        return@launch
                                     }
 
                                     if (refreshed != null) {
@@ -173,8 +197,9 @@ fun RemotePlaybackPanel(
                                             "Direct playback is no longer available. Opening the saved page.",
                                             Toast.LENGTH_SHORT
                                         ).show()
-                                        if (originalSourceUrl.isNotBlank()) {
-                                            onOpenBrowser(originalSourceUrl)
+                                        val sourceUrl = latestOriginalSourceUrl.value
+                                        if (sourceUrl.isNotBlank()) {
+                                            latestOnOpenBrowser.value(sourceUrl)
                                         }
                                     }
                                 }

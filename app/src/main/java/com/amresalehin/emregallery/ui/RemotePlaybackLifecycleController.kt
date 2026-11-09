@@ -44,6 +44,28 @@ internal class RemotePlaybackLifecycleController(
 }
 
 /**
+ * Prevents callbacks from a disposed player session from mutating Compose state or touching
+ * an already-released player. Player callbacks and Compose disposal are serialized under one
+ * small lock so close() is a hard boundary even if a callback arrives from another thread.
+ */
+internal class RemotePlaybackSessionGuard {
+    private val lock = Any()
+    private var active = true
+
+    fun close() {
+        synchronized(lock) {
+            active = false
+        }
+    }
+
+    fun runIfActive(action: () -> Unit) {
+        synchronized(lock) {
+            if (active) action()
+        }
+    }
+}
+
+/**
  * Bridges Android lifecycle events to the playback intent controller.
  *
  * The play intent is supplied as a lambda so ON_PAUSE observes the player's current value,

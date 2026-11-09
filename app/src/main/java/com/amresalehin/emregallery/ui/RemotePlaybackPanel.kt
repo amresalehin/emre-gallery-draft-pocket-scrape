@@ -277,6 +277,7 @@ internal fun RemotePlaybackDialog(
     val player = playerState.value
 
     DisposableEffect(playback.asset.id, playback.resolution, lifecycleOwner) {
+        val sessionGuard = RemotePlaybackSessionGuard()
         var activePlayer: ExoPlayer? = null
         var playerListener: Player.Listener? = null
         var lifecycleObserver: LifecycleEventObserver? = null
@@ -295,7 +296,9 @@ internal fun RemotePlaybackDialog(
             )
             val listener = object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
-                    lifecycleController.onPlaybackError()
+                    sessionGuard.runIfActive {
+                        lifecycleController.onPlaybackError()
+                    }
                 }
             }
             playerListener = listener
@@ -318,6 +321,7 @@ internal fun RemotePlaybackDialog(
             }
             playerState.value = created
         } catch (_: Exception) {
+            sessionGuard.close()
             lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
             activePlayer?.let { failedPlayer ->
                 playerListener?.let { failedPlayer.removeListener(it) }
@@ -332,6 +336,7 @@ internal fun RemotePlaybackDialog(
         }
 
         onDispose {
+            sessionGuard.close()
             lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
             activePlayer?.let { releasingPlayer ->
                 playerListener?.let { releasingPlayer.removeListener(it) }

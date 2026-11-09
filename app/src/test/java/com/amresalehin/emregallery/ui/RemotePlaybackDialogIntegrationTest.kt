@@ -250,6 +250,91 @@ class RemotePlaybackDialogIntegrationTest {
         assertTrue(viewWasDetachedBeforeRelease)
     }
 
+    @Test
+    fun reopenedDialogUsesFreshPlayerAndIgnoresStaleListenerFromDisposedSession() {
+        val playback = playablePlayback()
+        val showDialog = mutableStateOf(true)
+        val players = mutableListOf<ExoPlayer>()
+        val views = mutableListOf<PlayerView>()
+        val listeners = mutableListOf<Player.Listener>()
+        val releaseCounts = mutableMapOf<Int, Int>()
+        val detachedBeforeRelease = mutableMapOf<Int, Boolean>()
+
+        composeRule.setContent {
+            MaterialTheme {
+                if (showDialog.value) {
+                    RemotePlaybackDialog(
+                        playback = playback,
+                        onDismiss = { showDialog.value = false },
+                        onOpenSourcePage = null,
+                        playerFactory = { context ->
+                            ExoPlayer.Builder(context).build().also(players::add)
+                        },
+                        preparePlayer = {},
+                        releasePlayer = { player ->
+                            val sessionIndex = players.indexOfFirst { it === player }
+                            releaseCounts[sessionIndex] = (releaseCounts[sessionIndex] ?: 0) + 1
+                            detachedBeforeRelease[sessionIndex] =
+                                views.getOrNull(sessionIndex)?.player == null
+                            player.release()
+                        },
+                        playerViewFactory = { context ->
+                            PlayerView(context).also(views::add)
+                        },
+                        onPlayerListenerCreated = listeners::add
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        val firstPlayer = requireNotNull(players.getOrNull(0))
+        val firstView = requireNotNull(views.getOrNull(0))
+        val firstListener = requireNotNull(listeners.getOrNull(0))
+        composeRule.runOnIdle { assertSame(firstPlayer, firstView.player) }
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        assertNull(firstView.player)
+        assertEquals(1, releaseCounts[0])
+        assertEquals(true, detachedBeforeRelease[0])
+
+        composeRule.runOnIdle { showDialog.value = true }
+        composeRule.waitForIdle()
+
+        val secondPlayer = requireNotNull(players.getOrNull(1))
+        val secondView = requireNotNull(views.getOrNull(1))
+        assertFalse(firstPlayer === secondPlayer)
+        composeRule.runOnIdle { assertSame(secondPlayer, secondView.player) }
+
+        // A callback already queued by the disposed session must not touch the replacement player.
+        composeRule.runOnIdle {
+            firstListener.onPlayerError(
+                PlaybackException(
+                    "Stale session error",
+                    null,
+                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                )
+            )
+        }
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertTrue(secondPlayer.playWhenReady)
+            assertSame(secondPlayer, secondView.player)
+        }
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        assertNull(secondView.player)
+        assertEquals(1, releaseCounts[0])
+        assertEquals(1, releaseCounts[1])
+        assertEquals(true, detachedBeforeRelease[0])
+        assertEquals(true, detachedBeforeRelease[1])
+    }
+
     private fun playablePlayback(): ResolvedMediaAssetPlayback {
         val resourceUrl = "https://media.example.com/video.mp4?token=test"
         val sourcePageUrl = "https://example.com/watch/123"

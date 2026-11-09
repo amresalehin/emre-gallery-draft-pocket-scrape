@@ -81,6 +81,19 @@ class RemotePlaybackLifecycleControllerTest {
     }
 
     @Test
+    fun disposedPlaybackSessionIgnoresLateCallbacksAndCloseIsIdempotent() {
+        val guard = RemotePlaybackSessionGuard()
+        var callbackCount = 0
+
+        guard.runIfActive { callbackCount += 1 }
+        guard.close()
+        guard.close()
+        guard.runIfActive { callbackCount += 1 }
+
+        assertEquals(1, callbackCount)
+    }
+
+    @Test
     fun resumeWithoutLifecyclePauseIsIgnored() {
         val actions = mutableListOf<String>()
         val controller = controller(actions)

@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -169,7 +168,7 @@ class RemotePlaybackDialogIntegrationTest {
 
         composeRule.onNodeWithText(
             "This direct resource could not be played. The bookmark and discovered media were left unchanged."
-        ).assertExists()
+        ).fetchSemanticsNode()
         composeRule.onNodeWithText("Open original page").performClick()
         composeRule.waitForIdle()
 

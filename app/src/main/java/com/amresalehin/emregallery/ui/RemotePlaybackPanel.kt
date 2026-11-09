@@ -443,7 +443,27 @@ internal fun shouldDetachRemotePlaybackPlayerView(
  * cannot detach a view that has already been rebound to a newer player.
  */
 internal fun detachRemotePlaybackPlayerView(view: PlayerView?, owningPlayer: Player?) {
-    if (view != null && shouldDetachRemotePlaybackPlayerView(view.player, owningPlayer)) {
+    if (view == null) return
+
+    detachRemotePlaybackPlayerViewIfOwned(
+        currentPlayer = view.player,
+        owningPlayer = owningPlayer
+    ) {
         view.player = null
+    }
+}
+
+/**
+ * Runs the actual detach only while the view is still bound to this session's player.
+ * Both AndroidView.onRelease and DisposableEffect.onDispose use this path, so either
+ * callback order is safe and the second callback becomes a no-op after the first detaches.
+ */
+internal fun detachRemotePlaybackPlayerViewIfOwned(
+    currentPlayer: Any?,
+    owningPlayer: Any?,
+    detach: () -> Unit
+) {
+    if (shouldDetachRemotePlaybackPlayerView(currentPlayer, owningPlayer)) {
+        detach()
     }
 }

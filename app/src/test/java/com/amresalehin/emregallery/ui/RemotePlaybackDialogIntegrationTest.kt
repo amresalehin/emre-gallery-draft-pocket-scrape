@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -22,6 +23,7 @@ import com.amresalehin.emregallery.data.MediaVerificationState
 import com.amresalehin.emregallery.data.PlaybackResolution
 import com.amresalehin.emregallery.data.ResolvedMediaAssetPlayback
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -175,6 +177,77 @@ class RemotePlaybackDialogIntegrationTest {
         assertEquals(1, releaseCount)
         assertEquals(0, playerViewFactoryCalls)
         assertEquals(1, sourceFallbackCalls)
+    }
+
+    @Test
+    fun terminalPlayerErrorRemovesNativeViewAndKeepsOriginalPageFallbackAvailable() {
+        val playback = playablePlayback()
+        val showDialog = mutableStateOf(true)
+        val players = mutableListOf<ExoPlayer>()
+        val views = mutableListOf<PlayerView>()
+        lateinit var playerListener: Player.Listener
+        var releaseCount = 0
+        var viewWasDetachedBeforeRelease = false
+        var sourceFallbackCalls = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                if (showDialog.value) {
+                    RemotePlaybackDialog(
+                        playback = playback,
+                        onDismiss = { showDialog.value = false },
+                        onOpenSourcePage = {
+                            sourceFallbackCalls += 1
+                            showDialog.value = false
+                        },
+                        playerFactory = { context ->
+                            ExoPlayer.Builder(context).build().also(players::add)
+                        },
+                        preparePlayer = {},
+                        releasePlayer = { player ->
+                            releaseCount += 1
+                            viewWasDetachedBeforeRelease = views.singleOrNull()?.player == null
+                            player.release()
+                        },
+                        playerViewFactory = { context ->
+                            PlayerView(context).also(views::add)
+                        },
+                        onPlayerListenerCreated = { playerListener = it }
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        val player = requireNotNull(players.singleOrNull())
+        val view = requireNotNull(views.singleOrNull())
+        composeRule.runOnIdle {
+            assertSame(player, view.player)
+            playerListener.onPlayerError(
+                PlaybackException(
+                    "Simulated terminal playback failure",
+                    null,
+                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                )
+            )
+        }
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertFalse(player.playWhenReady)
+            assertNull(view.player)
+        }
+        composeRule.onNodeWithText(
+            "This direct resource could not be played. The bookmark and discovered media were left unchanged."
+        ).fetchSemanticsNode()
+        assertEquals(0, releaseCount)
+
+        composeRule.onNodeWithText("Open original page").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, sourceFallbackCalls)
+        assertEquals(1, releaseCount)
+        assertTrue(viewWasDetachedBeforeRelease)
     }
 
     private fun playablePlayback(): ResolvedMediaAssetPlayback {

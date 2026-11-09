@@ -259,7 +259,8 @@ internal fun RemotePlaybackDialog(
     },
     preparePlayer: (ExoPlayer) -> Unit = { it.prepare() },
     releasePlayer: (ExoPlayer) -> Unit = { it.release() },
-    playerViewFactory: (Context) -> PlayerView = { PlayerView(it) }
+    playerViewFactory: (Context) -> PlayerView = { PlayerView(it) },
+    onPlayerListenerCreated: (Player.Listener) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -299,6 +300,7 @@ internal fun RemotePlaybackDialog(
             }
             playerListener = listener
             created.addListener(listener)
+            onPlayerListenerCreated(listener)
 
             val observer = remotePlaybackLifecycleObserver(
                 controller = lifecycleController,

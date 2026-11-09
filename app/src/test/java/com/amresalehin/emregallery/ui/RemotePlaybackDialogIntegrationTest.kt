@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
@@ -125,6 +127,55 @@ class RemotePlaybackDialogIntegrationTest {
         composeRule.runOnIdle { assertNull(view.player) }
         assertEquals(1, releaseCount)
         assertTrue(viewWasDetachedBeforeRelease)
+    }
+
+    @Test
+    fun prepareFailureKeepsBrowserFallbackAvailableAndReleasesPlayerOnce() {
+        val playback = playablePlayback()
+        val showDialog = mutableStateOf(true)
+        var releaseCount = 0
+        var playerViewFactoryCalls = 0
+        var sourceFallbackCalls = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                if (showDialog.value) {
+                    RemotePlaybackDialog(
+                        playback = playback,
+                        onDismiss = { showDialog.value = false },
+                        onOpenSourcePage = {
+                            sourceFallbackCalls += 1
+                            showDialog.value = false
+                        },
+                        playerFactory = { context ->
+                            ExoPlayer.Builder(context).build()
+                        },
+                        preparePlayer = {
+                            throw IllegalStateException("Simulated preparation failure")
+                        },
+                        releasePlayer = { player ->
+                            releaseCount += 1
+                            player.release()
+                        },
+                        playerViewFactory = { context ->
+                            playerViewFactoryCalls += 1
+                            PlayerView(context)
+                        }
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText(
+            "This direct resource could not be played. The bookmark and discovered media were left unchanged."
+        ).assertExists()
+        composeRule.onNodeWithText("Open original page").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, releaseCount)
+        assertEquals(0, playerViewFactoryCalls)
+        assertEquals(1, sourceFallbackCalls)
     }
 
     private fun playablePlayback(): ResolvedMediaAssetPlayback {

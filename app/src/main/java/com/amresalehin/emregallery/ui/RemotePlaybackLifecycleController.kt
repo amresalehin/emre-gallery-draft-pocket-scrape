@@ -73,11 +73,14 @@ internal class RemotePlaybackSessionGuard {
  */
 internal fun remotePlaybackLifecycleObserver(
     controller: RemotePlaybackLifecycleController,
-    playWhenReady: () -> Boolean
+    playWhenReady: () -> Boolean,
+    sessionGuard: RemotePlaybackSessionGuard = RemotePlaybackSessionGuard()
 ): LifecycleEventObserver = LifecycleEventObserver { _, event ->
-    when (event) {
-        Lifecycle.Event.ON_PAUSE -> controller.onPause(playWhenReady())
-        Lifecycle.Event.ON_RESUME -> controller.onResume()
-        else -> Unit
+    sessionGuard.runIfActive {
+        when (event) {
+            Lifecycle.Event.ON_PAUSE -> controller.onPause(playWhenReady())
+            Lifecycle.Event.ON_RESUME -> controller.onResume()
+            else -> Unit
+        }
     }
 }

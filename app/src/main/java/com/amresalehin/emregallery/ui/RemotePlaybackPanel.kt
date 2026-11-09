@@ -307,7 +307,8 @@ internal fun RemotePlaybackDialog(
 
             val observer = remotePlaybackLifecycleObserver(
                 controller = lifecycleController,
-                playWhenReady = { created.playWhenReady }
+                playWhenReady = { created.playWhenReady },
+                sessionGuard = sessionGuard
             )
             lifecycleObserver = observer
             lifecycleOwner.lifecycle.addObserver(observer)

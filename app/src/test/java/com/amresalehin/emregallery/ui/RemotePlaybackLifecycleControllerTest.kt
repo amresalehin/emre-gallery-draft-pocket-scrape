@@ -159,6 +159,33 @@ class RemotePlaybackLifecycleControllerTest {
     }
 
     @Test
+    fun disposedLifecycleObserverIgnoresLateEventsWithoutReadingReleasedPlayerState() {
+        val actions = mutableListOf<String>()
+        var playWhenReadyReads = 0
+        val sessionGuard = RemotePlaybackSessionGuard()
+        val observer = remotePlaybackLifecycleObserver(
+            controller = controller(actions),
+            playWhenReady = {
+                playWhenReadyReads += 1
+                true
+            },
+            sessionGuard = sessionGuard
+        )
+        val owner = TestLifecycleOwner()
+        owner.lifecycle.addObserver(observer)
+
+        sessionGuard.close()
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+        assertEquals(emptyList<String>(), actions)
+        assertEquals(0, playWhenReadyReads)
+    }
+
+    @Test
     fun lifecycleObserverIgnoresUnrelatedEvents() {
         val actions = mutableListOf<String>()
         val observer = remotePlaybackLifecycleObserver(

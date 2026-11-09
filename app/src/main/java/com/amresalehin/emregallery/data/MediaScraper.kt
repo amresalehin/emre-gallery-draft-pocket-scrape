@@ -3,7 +3,9 @@ package com.amresalehin.emregallery.data
 data class MediaProvenance(
     val extractorEngine: String = "Static HTML",
     val pageUrl: String = "",
-    val domSelector: String? = null
+    val domSelector: String? = null,
+    val sourcePageUrls: List<String> = emptyList(),
+    val domSelectors: List<String> = emptyList()
 )
 
 data class ScrapedMediaItem(

@@ -10,9 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.net.URL
 
 /**
@@ -45,6 +45,8 @@ class ExtractionCoordinator(private val context: Context) {
 
     private val _state = MutableStateFlow(ExtractionState())
     val state: StateFlow<ExtractionState> = _state.asStateFlow()
+
+    private val mediaDiscoveryCoordinator = MediaDiscoveryCoordinator()
 
     fun extract(targetUrl: String, scope: CoroutineScope, directOnly: Boolean = false) {
         cancel()
@@ -85,8 +87,11 @@ class ExtractionCoordinator(private val context: Context) {
                 val modified = MediaNormalizer.mergeCandidates(itemsMap, newList)
                 if (modified || msg != null || phase != null || title != null) {
                     val currentItems = itemsMap.values.toList()
+                    val discoveryCandidates = currentItems.map { MediaDiscoveryCandidate.from(it) }
                     _state.value = _state.value.copy(
                         items = currentItems,
+                        discoveryCandidates = discoveryCandidates,
+                        galleryAssessment = GalleryDetector.assess(discoveryCandidates),
                         pageTitle = if (_state.value.pageTitle.isBlank() && !title.isNullOrBlank()) title else _state.value.pageTitle,
                         statusMessage = msg ?: _state.value.statusMessage,
                         phase = phase ?: _state.value.phase
@@ -107,7 +112,10 @@ class ExtractionCoordinator(private val context: Context) {
             try {
                 // Step 1: OkHttp Direct-Media Fast Path Probe
                 updateStatus("Probing URL headers with OkHttp...", ExtractionPhase.DIRECT_MEDIA)
-                val directProbe = OkHttpDownloader.probeDirectMedia(requestContext.url)
+                val directProbe = OkHttpDownloader.probeDiscoveredMedia(requestContext.url)
+                itemsMutex.withLock {
+                    _state.value = _state.value.copy(directProbeState = directProbe.verificationState)
+                }
 
                 if (directProbe.isConfirmedDirectMedia) {
                     val finalUrl = directProbe.finalUrl
@@ -134,20 +142,23 @@ class ExtractionCoordinator(private val context: Context) {
                         mimeType = classification.mimeType,
                         sizeBytes = cl,
                         source = "Direct HTTP",
-                        provenance = MediaProvenance(extractorEngine = "OkHttp Direct", pageUrl = requestContext.url)
+                        provenance = MediaProvenance(extractorEngine = "OkHttp Direct", pageUrl = requestContext.url),
+                        metadata = mutableMapOf<String, String>().apply {
+                            put("source_url", requestContext.url)
+                            put("direct_response_confirmed", "true")
+                            put("http_status_code", directProbe.statusCode.toString())
+                            ct?.takeIf { it.isNotBlank() }?.let { put("mime_hint", it) }
+                        }
                     )
 
                     updateItems(listOf(directItem), title = derivedTitle, phase = ExtractionPhase.COMPLETED)
+                    persistDiscoveredAssets(requestContext.url, _state.value.discoveryCandidates)
                     finishSuccess(itemsMap.size)
                     return@launch
                 }
 
                 // Step 2: Inconclusive / Not direct media -> Concurrent Multi-Engine Discovery
                 updateStatus("Initiating concurrent discovery (yt-dlp, gallery-dl, Browser Session)...", ExtractionPhase.YT_DLP)
-
-                val supportInfo = withContext(Dispatchers.IO) {
-                    GalleryDlEngine.checkSupport(requestContext.url)
-                }
 
                 val cookies = OkHttpDownloader.sharedCookieJar.getCookieString(requestContext.url).takeIf { it.isNotBlank() }
                 val options = GalleryDlOptions(cookies = cookies)
@@ -209,73 +220,71 @@ class ExtractionCoordinator(private val context: Context) {
                 galleryDlJob.join()
                 browserJob.join()
 
-                // Check bot challenges or login requirement if candidates are still empty
-                val needsSignInDirect = BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError)
-                val isSupportedByEngines = supportInfo.isSupported
-                val needsCookiesOrBot = BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError) ||
-                        (isSupportedByEngines && itemsMap.isEmpty() && cookies.isNullOrBlank())
-
-                if (needsSignInDirect && itemsMap.isEmpty()) {
+                // Stop when a site requires sign-in, CAPTCHA, bot verification, or rate-limit recovery.
+                // Existing user-session cookies may be used, but discovery never opens a hidden
+                // browser to acquire new cookies or retries an access challenge automatically.
+                if (itemsMap.isEmpty() && BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError)) {
                     _state.value = _state.value.copy(
                         isRunning = false,
                         requiresSignIn = true,
                         signInUrl = requestContext.url,
                         statusMessage = "Sign-in required for $domain",
-                        errorMessage = "Sign in to $domain to access and download this media."
+                        errorMessage = "Authentication required. Open the original page in the browser and sign in manually."
                     )
                     return@launch
-                } else if (needsCookiesOrBot && itemsMap.isEmpty()) {
-                    updateStatus("Resolving session cookies in background for $domain...", ExtractionPhase.YT_DLP)
-                    _state.value = _state.value.copy(isObtainingCookiesInBackground = true)
-
-                    val cookieRes = withContext(Dispatchers.Main) {
-                        BrowserSession.fetchCookiesInBackground(
-                            context = context,
-                            targetUrl = requestContext.url,
-                            onStatusUpdate = { s -> launch { updateStatus(s) } }
-                        )
-                    }
-                    _state.value = _state.value.copy(isObtainingCookiesInBackground = false)
-
-                    if (cookieRes.requiresSignIn) {
-                        _state.value = _state.value.copy(
-                            isRunning = false,
-                            requiresSignIn = true,
-                            signInUrl = cookieRes.signInUrl ?: requestContext.url,
-                            statusMessage = "Sign-in required for $domain",
-                            errorMessage = "Sign in to $domain to access and download this media."
-                        )
-                        return@launch
-                    } else if (!cookieRes.cookies.isNullOrBlank()) {
-                        val updatedOptions = options.copy(cookies = cookieRes.cookies)
-                        updateStatus("Cookies refreshed. Re-probing with yt-dlp & gallery-dl...", ExtractionPhase.YT_DLP)
-
-                        val retryYt = withContext(Dispatchers.IO) {
-                            try {
-                                GalleryDlEngine.extractYtDlp(requestContext.url, updatedOptions)
-                            } catch (e: Exception) {
-                                GalleryDlExtractResult(success = false, errorMessage = e.localizedMessage)
-                            }
-                        }
-                        if (retryYt.success && retryYt.items.isNotEmpty()) {
-                            updateItems(retryYt.items, title = retryYt.pageTitle)
-                        }
-
-                        val retryGdl = withContext(Dispatchers.IO) {
-                            try {
-                                GalleryDlEngine.extractGalleryDl(requestContext.url, updatedOptions)
-                            } catch (e: Exception) {
-                                GalleryDlExtractResult(success = false, errorMessage = e.localizedMessage)
-                            }
-                        }
-                        if (retryGdl.success && retryGdl.items.isNotEmpty()) {
-                            updateItems(retryGdl.items, title = retryGdl.pageTitle)
-                        }
-                    }
+                }
+                if (itemsMap.isEmpty() && BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError)) {
+                    val message = "The site requires authentication, bot verification, or rate-limit recovery. Open the original page in the browser; automatic discovery will not retry or bypass the access check."
+                    _state.value = _state.value.copy(
+                        isRunning = false,
+                        phase = ExtractionPhase.ERROR,
+                        statusMessage = message,
+                        errorMessage = message
+                    )
+                    return@launch
                 }
 
-                // Evaluate merged discovery results
+                // Verify discovered candidates independently from the legacy extraction items.
+                // If any engine reports an access challenge, preserve candidates as unverified and
+                // leave recovery to the user's original browser session.
                 if (itemsMap.isNotEmpty()) {
+                    val directProbeAccessBlocked = directProbe.verificationState in setOf(
+                        MediaVerificationState.AUTH_REQUIRED,
+                        MediaVerificationState.ACCESS_RESTRICTED,
+                        MediaVerificationState.RATE_LIMITED
+                    )
+                    val accessChallengeReported = directProbeAccessBlocked ||
+                        BotDetectionMitigator.indicatesSignInRequired(lastDiagnosticError) ||
+                        BotDetectionMitigator.indicatesCookiesOrBotVerificationNeeded(lastDiagnosticError)
+                    if (!accessChallengeReported) {
+                        updateStatus("Verifying discovered media candidates...")
+                        val discoveryResult = try {
+                            mediaDiscoveryCoordinator.discover(
+                                items = itemsMap.values.toList(),
+                                sourcePageUrl = requestContext.url
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            Log.w(
+                                "ExtractionCoordinator",
+                                "Candidate verification failed; retaining unverified discovery state",
+                                error
+                            )
+                            null
+                        }
+                        if (discoveryResult != null) {
+                            itemsMutex.withLock {
+                                _state.value = _state.value.copy(
+                                    discoveryCandidates = discoveryResult.candidates,
+                                    galleryAssessment = GalleryDetector.assess(discoveryResult.candidates)
+                                )
+                            }
+                        }
+                    }
+                    // Persist only when this source page already has a durable bookmark.
+                    // A persistence failure must never turn successful extraction into failure.
+                    persistDiscoveredAssets(requestContext.url, _state.value.discoveryCandidates)
                     finishSuccess(itemsMap.size)
                     return@launch
                 }
@@ -304,6 +313,36 @@ class ExtractionCoordinator(private val context: Context) {
                     phase = ExtractionPhase.ERROR,
                     statusMessage = "Extraction failed: $err",
                     errorMessage = err
+                )
+            }
+        }
+    }
+
+    private suspend fun persistDiscoveredAssets(
+        sourcePageUrl: String,
+        candidates: List<MediaDiscoveryCandidate>
+    ) {
+        if (candidates.isEmpty()) return
+
+        withContext(Dispatchers.IO) {
+            val bookmark = try {
+                MediaInboxRepository.getInstance(context).findBookmarkBySourceUrl(sourcePageUrl)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w("ExtractionCoordinator", "Could not resolve saved bookmark for media persistence", error)
+                null
+            } ?: return@withContext
+
+            try {
+                MediaAssetRepository.getInstance(context).upsertCandidates(bookmark.id, candidates)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(
+                    "ExtractionCoordinator",
+                    "Media assets could not be persisted; extraction remains successful",
+                    error
                 )
             }
         }
@@ -388,8 +427,12 @@ class ExtractionCoordinator(private val context: Context) {
         }
         val modified = MediaNormalizer.mergeCandidates(existingMap, newList)
         if (modified || title != null || domain != null) {
+            val mergedItems = existingMap.values.toList()
+            val discoveryCandidates = mergedItems.map { MediaDiscoveryCandidate.from(it) }
             _state.value = _state.value.copy(
-                items = existingMap.values.toList(),
+                items = mergedItems,
+                discoveryCandidates = discoveryCandidates,
+                galleryAssessment = GalleryDetector.assess(discoveryCandidates),
                 pageTitle = title ?: _state.value.pageTitle,
                 domain = domain ?: _state.value.domain,
                 statusMessage = "Discovered ${existingMap.size} media items"

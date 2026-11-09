@@ -1065,6 +1065,84 @@ object MediaClassifier {
         return 0
     }
 
+    private fun mergeDuplicateProvenance(
+        existing: MediaProvenance,
+        incoming: MediaProvenance,
+        preferred: ScrapedMediaItem
+    ): MediaProvenance {
+        val engines = listOf(existing.extractorEngine, incoming.extractorEngine)
+            .flatMap { it.split("+") }
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val primaryPageUrl = existing.pageUrl.takeIf { it.isNotBlank() }
+            ?: existing.sourcePageUrls.firstOrNull { it.isNotBlank() }
+            ?: incoming.pageUrl.takeIf { it.isNotBlank() }
+            ?: incoming.sourcePageUrls.firstOrNull { it.isNotBlank() }
+            ?: ""
+        val sourcePageUrls = (
+            listOf(primaryPageUrl, existing.pageUrl) +
+                existing.sourcePageUrls +
+                listOf(incoming.pageUrl) +
+                incoming.sourcePageUrls
+            ).filter { it.isNotBlank() }.distinct()
+        val domSelectors = (
+            listOfNotNull(existing.domSelector, incoming.domSelector) +
+                existing.domSelectors + incoming.domSelectors
+            ).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
+        return preferred.provenance.copy(
+            extractorEngine = engines.joinToString(" + ").ifBlank { preferred.provenance.extractorEngine },
+            pageUrl = primaryPageUrl,
+            domSelector = existing.domSelector ?: incoming.domSelector ?: preferred.provenance.domSelector,
+            sourcePageUrls = sourcePageUrls,
+            domSelectors = domSelectors
+        )
+    }
+
+    private fun mergeDuplicateMetadata(
+        existing: ScrapedMediaItem,
+        incoming: ScrapedMediaItem,
+        preferred: ScrapedMediaItem
+    ): Map<String, String> {
+        val merged = if (preferred === incoming) {
+            existing.metadata + incoming.metadata
+        } else {
+            incoming.metadata + existing.metadata
+        }
+        val mergedRole = MediaDiscoveryPolicy.mergeRoleHints(
+            MediaDiscoveryPolicy.roleHint(existing.metadata),
+            MediaDiscoveryPolicy.roleHint(incoming.metadata)
+        )
+        return if (mergedRole != null) merged + ("asset_role" to mergedRole.name) else merged
+    }
+
+    private fun mergeDuplicateItems(
+        existing: ScrapedMediaItem,
+        incoming: ScrapedMediaItem,
+        resolveOriginalUrl: Boolean
+    ): ScrapedMediaItem {
+        val preferred = if (compareMediaQuality(incoming, existing) > 0) incoming else existing
+        val secondary = if (preferred === incoming) existing else incoming
+        val mergedResolution = when {
+            parsePixelArea(preferred) != null -> preferred.resolutionHint ?: secondary.resolutionHint
+            parsePixelArea(secondary) != null -> secondary.resolutionHint ?: preferred.resolutionHint
+            !preferred.resolutionHint.isNullOrBlank() && preferred.resolutionHint != "Network" -> preferred.resolutionHint
+            !secondary.resolutionHint.isNullOrBlank() && secondary.resolutionHint != "Network" -> secondary.resolutionHint
+            else -> preferred.resolutionHint ?: secondary.resolutionHint
+        }
+
+        return preferred.copy(
+            id = existing.id,
+            url = if (resolveOriginalUrl) resolveOriginalMedia(preferred.url).mediaUrl else preferred.url,
+            thumbnailUrl = preferred.thumbnailUrl ?: secondary.thumbnailUrl,
+            resolutionHint = mergedResolution,
+            provenance = mergeDuplicateProvenance(existing.provenance, incoming.provenance, preferred),
+            metadata = mergeDuplicateMetadata(existing, incoming, preferred),
+            downloadHeaders = secondary.downloadHeaders + preferred.downloadHeaders
+        )
+    }
+
     /**
      * Merges incoming media items into a target map keyed by deduplicationKey.
      * Unified pipeline for deduplication, video-poster folding, quality upgrades,
@@ -1127,13 +1205,7 @@ object MediaClassifier {
                     targetMap[key] = candidateVideo
                     modified = true
                 } else {
-                    val cmp = compareMediaQuality(candidateVideo, existing)
-                    val preferred = if (cmp > 0) candidateVideo else existing
-                    val secondary = if (preferred === candidateVideo) existing else candidateVideo
-                    val upgraded = preferred.copy(
-                        id = existing.id,
-                        thumbnailUrl = preferred.thumbnailUrl ?: secondary.thumbnailUrl
-                    )
+                    val upgraded = mergeDuplicateItems(existing, candidateVideo, resolveOriginalUrl = false)
                     if (upgraded != existing) {
                         targetMap[key] = upgraded
                         modified = true
@@ -1144,7 +1216,15 @@ object MediaClassifier {
 
             // Case B: Incoming item is an Image -> check if it matches an existing video's thumbnail/poster
             val currentVideoThumbKeys = getVideoThumbKeys()
-            if (key in currentVideoThumbKeys) {
+            val incomingRole = MediaDiscoveryPolicy.roleHint(item.metadata)
+            val canFoldAsVideoThumbnail = incomingRole == null ||
+                incomingRole in setOf(
+                    MediaAssetRole.CONTENT_IMAGE,
+                    MediaAssetRole.PRODUCT_IMAGE,
+                    MediaAssetRole.THUMBNAIL,
+                    MediaAssetRole.VIDEO_POSTER
+                )
+            if (key in currentVideoThumbKeys && canFoldAsVideoThumbnail) {
                 for ((vKey, vItem) in targetMap.entries.toList()) {
                     if (vItem.isVideo) {
                         val ytId = extractYouTubeVideoId(vItem.url)
@@ -1162,6 +1242,9 @@ object MediaClassifier {
                         }
                     }
                 }
+                if (targetMap.remove(key) != null) {
+                    modified = true
+                }
                 continue
             }
 
@@ -1171,31 +1254,7 @@ object MediaClassifier {
                 targetMap[key] = item
                 modified = true
             } else {
-                val cmp = compareMediaQuality(item, existing)
-                val preferred = if (cmp > 0) item else existing
-                val secondary = if (preferred === item) existing else item
-
-                val engines = listOf(existing.provenance.extractorEngine, item.provenance.extractorEngine).distinct()
-                val mergedEngine = engines.joinToString(" + ")
-                val mergedThumb = preferred.thumbnailUrl ?: secondary.thumbnailUrl
-                val mergedResolution = when {
-                    parsePixelArea(preferred) != null -> preferred.resolutionHint ?: secondary.resolutionHint
-                    parsePixelArea(secondary) != null -> secondary.resolutionHint ?: preferred.resolutionHint
-                    !preferred.resolutionHint.isNullOrBlank() && preferred.resolutionHint != "Network" -> preferred.resolutionHint
-                    !secondary.resolutionHint.isNullOrBlank() && secondary.resolutionHint != "Network" -> secondary.resolutionHint
-                    else -> preferred.resolutionHint ?: secondary.resolutionHint
-                }
-                val mergedHeaders = secondary.downloadHeaders + preferred.downloadHeaders
-                val resolvedUrl = resolveOriginalMedia(preferred.url).mediaUrl
-
-                val upgraded = preferred.copy(
-                    id = existing.id,
-                    url = resolvedUrl,
-                    thumbnailUrl = mergedThumb,
-                    resolutionHint = mergedResolution,
-                    provenance = preferred.provenance.copy(extractorEngine = mergedEngine),
-                    downloadHeaders = mergedHeaders
-                )
+                val upgraded = mergeDuplicateItems(existing, item, resolveOriginalUrl = true)
                 if (upgraded != existing) {
                     targetMap[key] = upgraded
                     modified = true

@@ -64,15 +64,33 @@ object DownloaderSession {
     }
 
     fun addDiscoveredItems(newItems: List<ScrapedMediaItem>, title: String? = null) {
-        if (newItems.isEmpty()) return
         synchronized(itemsLock) {
-            val updated = MediaNormalizer.mergeCandidates(canonicalMap, newItems)
-            if (updated) {
-                val sorted = canonicalMap.values.toList()
-                _discoveredItems.value = sorted
-                // Auto-select all items by default if user hasn't explicitly customized selection
-                if (_selectedItemIds.value.isEmpty()) {
-                    _selectedItemIds.value = sorted.map { it.id }.toSet()
+            if (newItems.isNotEmpty()) {
+                // Merge before filtering so later semantic evidence can downgrade an earlier
+                // content guess (for example CONTENT_IMAGE -> AVATAR) and posters can still
+                // enrich a matching video's thumbnail without becoming standalone assets.
+                val merged = MediaNormalizer.mergeCandidates(canonicalMap, newItems)
+                val rejectedKeys = canonicalMap.entries
+                    .filter { (_, item) ->
+                        !MediaDiscoveryPolicy.shouldOfferForManualDownload(MediaDiscoveryCandidate.from(item))
+                    }
+                    .map { it.key }
+                rejectedKeys.forEach(canonicalMap::remove)
+
+                if (merged || rejectedKeys.isNotEmpty()) {
+                    val sorted = canonicalMap.values.toList()
+                    _discoveredItems.value = sorted
+                    val validIds = sorted.map { it.id }.toSet()
+                    val currentSelection = _selectedItemIds.value
+                    val selectionWasEmpty = currentSelection.isEmpty()
+                    val prunedSelection = currentSelection.intersect(validIds)
+                    if (prunedSelection != currentSelection) {
+                        _selectedItemIds.value = prunedSelection
+                    }
+                    // This updates selection only; enqueueing still requires a separate user action.
+                    if (selectionWasEmpty && _selectedItemIds.value.isEmpty() && sorted.isNotEmpty()) {
+                        _selectedItemIds.value = validIds
+                    }
                 }
             }
             if (!title.isNullOrBlank() && _pageTitle.value == _sourceDomain.value) {
@@ -123,10 +141,15 @@ object DownloaderSession {
     }
 
     fun selectAll(ids: Set<String>) {
-        _selectedItemIds.value = ids
+        synchronized(itemsLock) {
+            val availableIds = canonicalMap.values.map { it.id }.toSet()
+            _selectedItemIds.value = ids.intersect(availableIds)
+        }
     }
 
     fun deselectAll() {
-        _selectedItemIds.value = emptySet()
+        synchronized(itemsLock) {
+            _selectedItemIds.value = emptySet()
+        }
     }
 }

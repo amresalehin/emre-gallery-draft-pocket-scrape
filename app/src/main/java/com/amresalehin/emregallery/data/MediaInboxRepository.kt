@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 
 data class MediaInboxItem(
     val id: String,
@@ -33,11 +34,18 @@ data class MediaInboxStack(
 )
 
 class MediaInboxRepository(private val context: Context) {
+    @Volatile
+    private var loadFailed: Boolean = false
+
     private val prefs: SharedPreferences =
         context.getSharedPreferences("media_inbox_prefs", Context.MODE_PRIVATE)
 
     private val _stacks = MutableStateFlow<List<MediaInboxStack>>(emptyList())
     val stacks: StateFlow<List<MediaInboxStack>> = _stacks.asStateFlow()
+
+    // Test seam for exercising failed durable writes without depending on filesystem failures.
+    @Volatile
+    internal var snapshotCommitOverride: ((String?) -> Boolean)? = null
 
     init {
         loadStacks()
@@ -95,11 +103,16 @@ class MediaInboxRepository(private val context: Context) {
                 )
             }
             val consolidated = consolidateStacks(list)
-            _stacks.value = consolidated
-            if (consolidated.size != list.size) {
-                persist()
+            if (consolidated.size != list.size && !persist(consolidated)) {
+                // Keep the exact loaded snapshot visible if consolidation could not be committed.
+                _stacks.value = list
+            } else {
+                _stacks.value = consolidated
             }
         } catch (e: Exception) {
+            // Keep the library unavailable rather than silently treating unreadable persisted
+            // data as an empty library that a later save could overwrite.
+            loadFailed = true
             _stacks.value = emptyList()
         }
     }
@@ -109,11 +122,8 @@ class MediaInboxRepository(private val context: Context) {
         val merged = mutableListOf<MediaInboxStack>()
         for (stack in rawList) {
             val existingIndex = merged.indexOfFirst { existing ->
-                when {
-                    existing.id == stack.id -> true
-                    existing.sourceUrl.isNotBlank() && stack.sourceUrl.isNotBlank() && existing.sourceUrl == stack.sourceUrl -> true
-                    else -> false
-                }
+                existing.id == stack.id ||
+                    BookmarkUrlIdentity.areSameSource(existing.sourceUrl, stack.sourceUrl)
             }
             if (existingIndex >= 0) {
                 val existing = merged[existingIndex]
@@ -132,50 +142,73 @@ class MediaInboxRepository(private val context: Context) {
         return merged
     }
 
-    private fun persist() {
-        try {
-            val jsonArray = JSONArray()
-            _stacks.value.forEach { stack ->
-                val stackObj = JSONObject().apply {
-                    put("id", stack.id)
-                    put("title", stack.title)
-                    put("sourceDomain", stack.sourceDomain)
-                    put("sourceUrl", stack.sourceUrl)
-                    put("timestampMillis", stack.timestampMillis)
-                    put("description", stack.description)
-
-                    val itemsArr = JSONArray()
-                    stack.items.forEach { itm ->
-                        val itmObj = JSONObject().apply {
-                            put("id", itm.id)
-                            put("title", itm.title)
-                            put("localUri", itm.localUri)
-                            put("sourceUrl", itm.sourceUrl)
-                            put("isVideo", itm.isVideo)
-                            put("isAudio", itm.isAudio)
-                            put("isStream", itm.isStream)
-                            put("format", itm.format)
-                            put("sizeBytes", itm.sizeBytes)
-                            put("dateAddedMillis", itm.dateAddedMillis)
-                        }
-                        itemsArr.put(itmObj)
-                    }
-                    put("items", itemsArr)
-                }
-                jsonArray.put(stackObj)
-            }
-            prefs.edit().putString(KEY_STACKS_JSON, jsonArray.toString()).apply()
-        } catch (e: Exception) {
-            // Log or ignore
+    /**
+     * Commits a complete serialized snapshot, or removes the stored snapshot when null.
+     * No caller should publish a new in-memory state until this operation succeeds.
+     */
+    private fun commitSnapshot(serializedJson: String?): Boolean {
+        check(!loadFailed) {
+            "Saved library could not be read; refusing to overwrite its persisted contents."
         }
+        snapshotCommitOverride?.let { return it(serializedJson) }
+
+        val editor = prefs.edit()
+        if (serializedJson == null) {
+            editor.remove(KEY_STACKS_JSON)
+        } else {
+            editor.putString(KEY_STACKS_JSON, serializedJson)
+        }
+        return editor.commit()
     }
 
+    private fun persist(stacks: List<MediaInboxStack>): Boolean {
+        val jsonArray = JSONArray()
+        stacks.forEach { stack ->
+            val stackObj = JSONObject().apply {
+                put("id", stack.id)
+                put("title", stack.title)
+                put("sourceDomain", stack.sourceDomain)
+                put("sourceUrl", stack.sourceUrl)
+                put("timestampMillis", stack.timestampMillis)
+                put("description", stack.description)
+
+                val itemsArr = JSONArray()
+                stack.items.forEach { itm ->
+                    val itmObj = JSONObject().apply {
+                        put("id", itm.id)
+                        put("title", itm.title)
+                        put("localUri", itm.localUri)
+                        put("sourceUrl", itm.sourceUrl)
+                        put("isVideo", itm.isVideo)
+                        put("isAudio", itm.isAudio)
+                        put("isStream", itm.isStream)
+                        put("format", itm.format)
+                        put("sizeBytes", itm.sizeBytes)
+                        put("dateAddedMillis", itm.dateAddedMillis)
+                    }
+                    itemsArr.put(itmObj)
+                }
+                put("items", itemsArr)
+            }
+            jsonArray.put(stackObj)
+        }
+        return commitSnapshot(jsonArray.toString())
+    }
+
+    private fun commitAndPublish(updated: List<MediaInboxStack>) {
+        check(persist(updated)) {
+            "Saved library could not be durably updated. Please retry."
+        }
+        _stacks.value = updated
+    }
+
+    @Synchronized
     fun addStack(stack: MediaInboxStack) {
         val updated = listOf(stack) + _stacks.value.filter { it.id != stack.id }
-        _stacks.value = consolidateStacks(updated)
-        persist()
+        commitAndPublish(consolidateStacks(updated))
     }
 
+    @Synchronized
     fun addBookmark(
         title: String,
         url: String,
@@ -183,9 +216,18 @@ class MediaInboxRepository(private val context: Context) {
         description: String = ""
     ): MediaInboxStack {
         val cleanUrl = url.trim()
+
+        // Re-saving an equivalent source returns the existing durable bookmark.
+        // Keep its original URL and user-edited metadata instead of creating a duplicate.
+        if (cleanUrl.isNotBlank()) {
+            _stacks.value.firstOrNull {
+                BookmarkUrlIdentity.areSameSource(it.sourceUrl, cleanUrl)
+            }?.let { return it }
+        }
+
         val cleanDomain = domain.ifBlank { MediaClassifier.cleanDomainFromUrl(cleanUrl) }
         val bookmarkStack = MediaInboxStack(
-            id = "bookmark_${System.currentTimeMillis()}",
+            id = "bookmark_${UUID.randomUUID()}",
             title = title.ifBlank { cleanDomain.ifBlank { cleanUrl } },
             sourceDomain = cleanDomain,
             sourceUrl = cleanUrl,
@@ -193,13 +235,32 @@ class MediaInboxRepository(private val context: Context) {
             timestampMillis = System.currentTimeMillis(),
             description = description
         )
-        addStack(bookmarkStack)
+        val updated = consolidateStacks(listOf(bookmarkStack) + _stacks.value)
+        check(persist(updated)) {
+            "Bookmark could not be durably saved. Please retry."
+        }
+        _stacks.value = updated
         return bookmarkStack
     }
 
+    /**
+     * Finds an already-saved bookmark by its conservative source identity.
+     * Discovery must never create a bookmark as a side effect.
+     */
+    @Synchronized
+    fun findBookmarkBySourceUrl(sourceUrl: String): MediaInboxStack? {
+        val cleanUrl = sourceUrl.trim()
+        if (cleanUrl.isEmpty()) return null
+        return _stacks.value.firstOrNull {
+            BookmarkUrlIdentity.areSameSource(it.sourceUrl, cleanUrl)
+        }
+    }
+
+    @Synchronized
     fun updateStack(updated: MediaInboxStack) {
-        _stacks.value = _stacks.value.map { if (it.id == updated.id) updated else it }
-        persist()
+        val current = _stacks.value
+        if (current.none { it.id == updated.id }) return
+        commitAndPublish(current.map { if (it.id == updated.id) updated else it })
     }
 
     @Synchronized
@@ -218,20 +279,13 @@ class MediaInboxRepository(private val context: Context) {
             existingIndex = current.indexOfFirst { it.sourceUrl == sourceUrl }
         }
 
+        var replacedItems: List<MediaInboxItem> = emptyList()
         if (existingIndex >= 0) {
             val existing = current[existingIndex]
-            // When replacing an item with the same sourceUrl or id, delete old file on disk if path changed
-            val replacedItems = existing.items.filter {
-                (it.id == item.id || (it.sourceUrl.isNotBlank() && it.sourceUrl == item.sourceUrl)) && it.localUri != item.localUri
-            }
-            for (oldItem in replacedItems) {
-                runCatching {
-                    val path = oldItem.localUri.removePrefix("file://")
-                    val file = File(path)
-                    if (file.exists()) {
-                        file.delete()
-                    }
-                }
+            // Defer cleanup until the replacement snapshot has been committed successfully.
+            replacedItems = existing.items.filter {
+                (it.id == item.id || (item.sourceUrl.isNotBlank() && it.sourceUrl == item.sourceUrl)) &&
+                    it.localUri != item.localUri
             }
 
             val updatedItems = existing.items.filter {
@@ -252,38 +306,53 @@ class MediaInboxRepository(private val context: Context) {
             )
             current.add(0, newStack)
         }
-        _stacks.value = consolidateStacks(current)
-        persist()
+        val updated = consolidateStacks(current)
+        commitAndPublish(updated)
+        deleteLocalFiles(replacedItems, updated)
     }
 
+    @Synchronized
     fun deleteStack(stackId: String) {
-        // Also cleanup local files
-        val stack = _stacks.value.firstOrNull { it.id == stackId }
-        stack?.items?.forEach { item ->
-            try {
-                if (item.localUri.startsWith("file://") || item.localUri.startsWith("/")) {
-                    val path = item.localUri.removePrefix("file://")
-                    val file = File(path)
-                    if (file.exists()) file.delete()
-                }
-            } catch (_: Exception) {}
-        }
-        _stacks.value = _stacks.value.filter { it.id != stackId }
-        persist()
+        val current = _stacks.value
+        val stack = current.firstOrNull { it.id == stackId } ?: return
+        val updated = current.filterNot { it.id == stackId }
+
+        // Keep both the in-memory record and its local files if the durable write fails.
+        commitAndPublish(updated)
+        deleteLocalFiles(stack.items, updated)
     }
 
+    @Synchronized
     fun clearAll() {
-        _stacks.value.forEach { stack ->
-            stack.items.forEach { item ->
-                try {
-                    val path = item.localUri.removePrefix("file://")
-                    val file = File(path)
-                    if (file.exists()) file.delete()
-                } catch (_: Exception) {}
-            }
+        val current = _stacks.value
+        check(commitSnapshot(null)) {
+            "Saved library could not be durably cleared. Please retry."
         }
         _stacks.value = emptyList()
-        prefs.edit().remove(KEY_STACKS_JSON).apply()
+        deleteLocalFiles(current.flatMap { it.items }, emptyList())
+    }
+
+    /**
+     * Removes only app-managed file paths that are no longer referenced by the committed snapshot.
+     * Content URIs and remote URLs are intentionally left untouched.
+     */
+    private fun deleteLocalFiles(
+        items: List<MediaInboxItem>,
+        remainingStacks: List<MediaInboxStack>
+    ) {
+        val retainedUris = remainingStacks.flatMap { it.items }.map { it.localUri }.toSet()
+        items.asSequence()
+            .map { it.localUri }
+            .filterNot { it in retainedUris }
+            .distinct()
+            .forEach { uri ->
+                val file = when {
+                    uri.startsWith("file://") -> File(uri.removePrefix("file://"))
+                    uri.startsWith("/") -> File(uri)
+                    else -> null
+                }
+                runCatching { file?.takeIf { it.isFile }?.delete() }
+            }
     }
 
     companion object {

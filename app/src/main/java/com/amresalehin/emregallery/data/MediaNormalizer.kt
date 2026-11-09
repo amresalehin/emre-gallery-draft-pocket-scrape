@@ -29,7 +29,8 @@ object MediaNormalizer {
         domSelector: String? = null,
         declaredWidth: Int? = null,
         declaredHeight: Int? = null,
-        customId: String? = null
+        customId: String? = null,
+        assetRoleHint: String? = null
     ): ScrapedMediaItem? {
         return MediaCaptureEngine.buildMediaItem(
             rawUrl = rawUrl,
@@ -43,7 +44,8 @@ object MediaNormalizer {
             domSelector = domSelector,
             declaredWidth = declaredWidth,
             declaredHeight = declaredHeight,
-            customId = customId
+            customId = customId,
+            assetRoleHint = assetRoleHint
         )
     }
 

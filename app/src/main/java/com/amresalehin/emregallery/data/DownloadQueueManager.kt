@@ -52,10 +52,11 @@ object DownloadQueueManager {
     }
 
     private fun serializeHeaders(headers: Map<String, String>): String? {
-        if (headers.isEmpty()) return null
+        val safeHeaders = sanitizeDownloadHeaders(headers)
+        if (safeHeaders.isEmpty()) return null
         return runCatching {
             val json = JSONObject()
-            headers.forEach { (k, v) ->
+            safeHeaders.forEach { (k, v) ->
                 // Guard against exceeding the 10KB WorkManager Data limit by capping individual header values
                 if (v.length <= 2048) {
                     json.put(k, v)

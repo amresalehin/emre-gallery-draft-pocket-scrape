@@ -57,7 +57,10 @@ class DualMediaExtractor(private val context: Context) {
         val errorMessage: String? = null,
         val requiresSignIn: Boolean = false,
         val signInUrl: String? = null,
-        val isObtainingCookiesInBackground: Boolean = false
+        val isObtainingCookiesInBackground: Boolean = false,
+        val discoveryCandidates: List<MediaDiscoveryCandidate> = emptyList(),
+        val directProbeState: MediaVerificationState? = null,
+        val galleryAssessment: MediaGalleryAssessment = MediaGalleryAssessment()
     )
 
     private val coordinator = ExtractionCoordinator(context)

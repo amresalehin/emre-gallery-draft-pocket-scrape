@@ -17,6 +17,21 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.math.abs
 
+internal fun sanitizeDownloadHeaders(headers: Map<String, String>): Map<String, String> {
+    val sensitiveNames = setOf(
+        "cookie",
+        "cookie2",
+        "set-cookie",
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+        "x-xsrf-token"
+    )
+    return headers.filterKeys { it.trim().lowercase() !in sensitiveNames }
+}
+
 /**
  * Persistent background downloader worker powered by Android Jetpack WorkManager.
  * Runs as a foreground service with a unique notification ID to ensure uninterrupted downloading.
@@ -90,21 +105,22 @@ class MediaDownloadWorker(
         val sourceEngine = inputData.getString(KEY_SOURCE_ENGINE) ?: ""
         val headersJson = inputData.getString(KEY_HEADERS_JSON)
 
-        val downloadHeaders: Map<String, String> = runCatching {
-            if (!headersJson.isNullOrBlank()) {
-                val obj = JSONObject(headersJson)
-                val map = mutableMapOf<String, String>()
-                val keys = obj.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    map[k] = obj.getString(k)
-                }
-                map
-            } else emptyMap()
-        }.getOrDefault(emptyMap())
+        val downloadHeaders = sanitizeDownloadHeaders(
+            runCatching {
+                if (!headersJson.isNullOrBlank()) {
+                    val obj = JSONObject(headersJson)
+                    val map = mutableMapOf<String, String>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        map[k] = obj.getString(k)
+                    }
+                    map
+                } else emptyMap()
+            }.getOrDefault(emptyMap())
+        )
 
         val cookieString = OkHttpDownloader.sharedCookieJar.getCookieString(mediaUrl).takeIf { it.isNotBlank() }
-            ?: downloadHeaders["Cookie"]
 
         try {
             setForeground(getForegroundInfo())

@@ -35,6 +35,10 @@ data class GalleryDlSupportInfo(
     val extractorEngine: String = "yt-dlp"
 )
 
+/**
+ * Optional credentials must be supplied explicitly by the caller from a user-authorized session.
+ * The extractor never reads ambient WebView cookies on its own.
+ */
 data class GalleryDlOptions(
     val userAgent: String? = null,
     val cookies: String? = null,
@@ -305,6 +309,17 @@ object GalleryDlEngine {
         return Pair(pageTitle, itemsList)
     }
 
+    internal fun buildExtractorOptionsJson(options: GalleryDlOptions): String {
+        return JSONObject().apply {
+            put("user_agent", options.userAgent ?: OkHttpDownloader.DEFAULT_USER_AGENT)
+            options.cookies?.takeIf { it.isNotBlank() }?.let { put("cookies", it) }
+            put("timeout", options.timeoutSeconds)
+        }.toString()
+    }
+
+    internal fun resolveExplicitCookies(cookies: String?): String? =
+        cookies?.takeIf { it.isNotBlank() }
+
     private suspend fun executePythonExtractor(
         methodName: String,
         url: String,
@@ -328,15 +343,7 @@ object GalleryDlEngine {
             val py = Python.getInstance()
             val runner = py.getModule("gallery_dl_runner")
 
-            val effectiveUa = options.userAgent ?: BotDetectionMitigator.STEALTH_USER_AGENT
-            val effectiveCookies = options.cookies
-                ?: runCatching { android.webkit.CookieManager.getInstance().getCookie(url.trim()) }.getOrNull()
-
-            val optsJson = JSONObject().apply {
-                put("user_agent", effectiveUa)
-                effectiveCookies?.let { put("cookies", it) }
-                put("timeout", options.timeoutSeconds)
-            }.toString()
+            val optsJson = buildExtractorOptionsJson(options)
 
             val rawResult = runner.callAttr(methodName, url.trim(), optsJson).toString()
             val root = JSONObject(rawResult)
@@ -406,12 +413,10 @@ object GalleryDlEngine {
             val sanitizedName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
             val targetFile = File(dir, "${System.currentTimeMillis()}_$sanitizedName")
 
-            val userAgent = headers?.get("User-Agent") ?: BotDetectionMitigator.STEALTH_USER_AGENT
-            val effectiveCookies = cookies ?: headers?.get("Cookie")
-                ?: runCatching {
-                    val cm = android.webkit.CookieManager.getInstance()
-                    cm.getCookie(mediaUrl) ?: referer?.let { cm.getCookie(it) }
-                }.getOrNull()
+            val userAgent = headers?.get("User-Agent") ?: OkHttpDownloader.DEFAULT_USER_AGENT
+            // Only the caller may supply the current user-session cookies for this download.
+            // Never read ambient WebView cookies or revive serialized candidate/header values.
+            val effectiveCookies = resolveExplicitCookies(cookies)
             val headersJson = if (!headers.isNullOrEmpty()) {
                 val json = JSONObject()
                 headers.forEach { (k, v) -> json.put(k, v) }

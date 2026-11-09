@@ -462,15 +462,15 @@ fun DirectBrowserView(
                                 loadWithOverviewMode = true
                                 mediaPlaybackRequiresUserGesture = false
                                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                userAgentString = BotDetectionMitigator.STEALTH_USER_AGENT
                             }
 
                             addJavascriptInterface(
-                                BrowserSession.EmreMediaBridge { rawUrl ->
+                                BrowserSession.EmreMediaBridge { rawUrl, assetRole ->
                                     val item = MediaCaptureEngine.buildMediaItem(
                                         rawUrl = rawUrl,
                                         source = ExtractionSource.DOM_SCRAPE,
-                                        baseUrl = currentUrl
+                                        baseUrl = currentUrl,
+                                        assetRoleHint = assetRole
                                     )
                                     if (item != null) {
                                         tabSession.registerMedia(item)
@@ -602,7 +602,6 @@ fun DirectBrowserView(
                                         return
                                     }
                                     isLoading = true
-                                    BotDetectionMitigator.injectStealth(view)
                                     currentUrl = url
                                     addressInput = url
                                     onUrlChange?.invoke(url)
@@ -618,7 +617,6 @@ fun DirectBrowserView(
                                         canGoForward = false
                                         return
                                     }
-                                    BotDetectionMitigator.injectStealth(view)
                                     BotDetectionMitigator.syncCookiesFromWebView(url)
                                     currentUrl = url
                                     addressInput = url
@@ -626,6 +624,11 @@ fun DirectBrowserView(
                                     tabSession.updateNavigation(url, view?.title)
                                     coroutineScope.launch {
                                         historyManager.recordVisit(url, view?.title)
+                                    }
+                                    if (BotDetectionMitigator.isBotChallenge(view?.title, url)) {
+                                        // Keep the page visible for manual verification, but do not scrape challenge content.
+                                        tabSession.clearMedia()
+                                        return
                                     }
                                     // Setup live MutationObserver and scan page DOM
                                     view?.evaluateJavascript(MediaCaptureEngine.getMutationObserverScript(), null)

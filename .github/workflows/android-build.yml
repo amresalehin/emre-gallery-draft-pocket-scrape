@@ -3,12 +3,14 @@ name: Android build
 on:
   push:
     branches:
+      - main
       - Develop
       - 'integration/**'
       - 'fix/**'
       - 'chore/**'
   pull_request:
     branches:
+      - main
       - Develop
       - 'integration/**'
       - 'fix/**'
@@ -49,6 +51,9 @@ jobs:
           python --version
           python3.10 --version
 
+      - name: Validate Python extractor syntax
+        run: python -m py_compile app/src/main/python/gallery_dl_runner.py
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -60,5 +65,23 @@ jobs:
         with:
           name: emre-gallery-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify Room schema snapshots are committed
+        shell: bash
+        run: |
+          changes="$(git status --porcelain --untracked-files=all -- app/schemas)"
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            echo "::error::Room schema changed during KSP generation. Commit the generated snapshot with the database change."
+            exit 1
+          fi
+
+      - name: Upload Room schema snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schema-${{ github.sha }}
+          path: app/schemas/
           if-no-files-found: error
           retention-days: 14

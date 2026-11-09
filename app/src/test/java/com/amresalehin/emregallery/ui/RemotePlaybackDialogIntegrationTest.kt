@@ -138,6 +138,75 @@ class RemotePlaybackDialogIntegrationTest {
     }
 
     @Test
+    fun observerRegistrationFailureRemovesObserverAndReleasesPlayerOnce() {
+        val playback = playablePlayback()
+        val lifecycleOwner = TrackingLifecycleOwner(throwAfterObserverAdded = true)
+        val showDialog = mutableStateOf(true)
+        val players = mutableListOf<ExoPlayer>()
+        var releaseCount = 0
+        var prepareCalls = 0
+        var playerViewFactoryCalls = 0
+        lateinit var playerListener: Player.Listener
+
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+                MaterialTheme {
+                    if (showDialog.value) {
+                        RemotePlaybackDialog(
+                            playback = playback,
+                            onDismiss = { showDialog.value = false },
+                            onOpenSourcePage = null,
+                            playerFactory = { context ->
+                                ExoPlayer.Builder(context).build().also(players::add)
+                            },
+                            preparePlayer = { prepareCalls += 1 },
+                            releasePlayer = { player ->
+                                releaseCount += 1
+                                player.release()
+                            },
+                            playerViewFactory = { context ->
+                                playerViewFactoryCalls += 1
+                                PlayerView(context)
+                            },
+                            onPlayerListenerCreated = { playerListener = it }
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        // Registration throws after the observer has reached LifecycleRegistry, so cleanup
+        // must remove the partially registered observer and release the already-created player.
+        assertEquals(1, players.size)
+        assertEquals(0, prepareCalls)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.addCount)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+        assertEquals(1, releaseCount)
+        assertEquals(0, playerViewFactoryCalls)
+
+        // A listener captured before registration failure must be inert after disposal.
+        composeRule.runOnIdle {
+            playerListener.onPlayerError(
+                PlaybackException(
+                    "Late error after observer registration failure",
+                    null,
+                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                )
+            )
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, releaseCount)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+    }
+
+    @Test
     fun prepareFailureRemovesObserverAndDoesNotRetryReleaseWhenReleaseThrows() {
         val playback = playablePlayback()
         val lifecycleOwner = TrackingLifecycleOwner()
@@ -557,9 +626,11 @@ class RemotePlaybackDialogIntegrationTest {
             )
         )
     }
-    private class TrackingLifecycleOwner : LifecycleOwner {
+    private class TrackingLifecycleOwner(
+        throwAfterObserverAdded: Boolean = false
+    ) : LifecycleOwner {
         private val registry = LifecycleRegistry(this)
-        val trackingLifecycle = TrackingLifecycle(registry)
+        val trackingLifecycle = TrackingLifecycle(registry, throwAfterObserverAdded)
 
         override val lifecycle: Lifecycle
             get() = trackingLifecycle
@@ -576,7 +647,8 @@ class RemotePlaybackDialogIntegrationTest {
     }
 
     private class TrackingLifecycle(
-        private val registry: LifecycleRegistry
+        private val registry: LifecycleRegistry,
+        private val throwAfterObserverAdded: Boolean
     ) : Lifecycle() {
         val observers = linkedSetOf<LifecycleObserver>()
         var addCount = 0
@@ -588,6 +660,9 @@ class RemotePlaybackDialogIntegrationTest {
             addCount += 1
             observers += observer
             registry.addObserver(observer)
+            if (throwAfterObserverAdded) {
+                throw IllegalStateException("Simulated lifecycle observer registration failure")
+            }
         }
 
         override fun removeObserver(observer: LifecycleObserver) {

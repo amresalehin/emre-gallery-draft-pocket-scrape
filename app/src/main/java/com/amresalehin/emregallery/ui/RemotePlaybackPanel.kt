@@ -223,8 +223,11 @@ fun RemotePlaybackPanel(
             onDismiss = { selectedPlayback = null },
             onOpenSourcePage = if (originalSourceUrl.isNotBlank()) {
                 {
-                    selectedPlayback = null
-                    onOpenBrowser(originalSourceUrl)
+                    openOriginalSourcePage(
+                        originalSourceUrl = originalSourceUrl,
+                        dismissPlayback = { selectedPlayback = null },
+                        onOpenBrowser = onOpenBrowser
+                    )
                 }
             } else {
                 null
@@ -416,6 +419,22 @@ private fun RemotePlaybackDialog(
             }
         }
     }
+}
+
+/**
+ * Dismisses remote playback before returning to the exact saved bookmark URL.
+ *
+ * Do not normalize, rebuild, or substitute the media resource URL here: the original
+ * page may contain client-side route state or query parameters needed by the browser.
+ */
+internal fun openOriginalSourcePage(
+    originalSourceUrl: String,
+    dismissPlayback: () -> Unit,
+    onOpenBrowser: (String) -> Unit
+) {
+    if (originalSourceUrl.isBlank()) return
+    dismissPlayback()
+    onOpenBrowser(originalSourceUrl)
 }
 
 /**

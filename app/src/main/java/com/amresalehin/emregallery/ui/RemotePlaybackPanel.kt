@@ -1,5 +1,7 @@
 package com.amresalehin.emregallery.ui
 
+import android.content.Context
+import android.view.View
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -28,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -374,23 +377,17 @@ private fun RemotePlaybackDialog(
                 // which detaches the PlayerView before the dialog's player is disposed.
                 if (shouldAttachRemotePlaybackView(player != null, playbackFailed)) {
                     val activePlayer = requireNotNull(player)
-                    AndroidView(
+                    OwnedRemotePlaybackAndroidView(
+                        owner = activePlayer,
+                        viewState = playerViewState,
                         factory = { viewContext ->
                             PlayerView(viewContext).apply {
-                                this.player = activePlayer
                                 useController = true
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                             }
                         },
-                        update = { view ->
-                            if (view.player !== activePlayer) view.player = activePlayer
-                            view.useController = true
-                            if (playerViewState.value !== view) playerViewState.value = view
-                        },
-                        onRelease = { view ->
-                            detachRemotePlaybackPlayerView(view, activePlayer)
-                            if (playerViewState.value === view) playerViewState.value = null
-                        },
+                        currentOwner = { it.player },
+                        bindOwner = { view, owner -> view.player = owner as? Player },
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(16f / 9f)
@@ -419,6 +416,42 @@ private fun RemotePlaybackDialog(
             }
         }
     }
+}
+
+/**
+ * Binds an AndroidView to one playback session and releases only that session's view.
+ *
+ * Keeping the ownership and release callbacks in one composable makes the real Compose
+ * AndroidView lifecycle testable with a lightweight View, without inflating Media3 resources.
+ */
+@Composable
+internal fun <V : View> OwnedRemotePlaybackAndroidView(
+    owner: Any,
+    viewState: MutableState<V?>,
+    factory: (Context) -> V,
+    currentOwner: (V) -> Any?,
+    bindOwner: (V, Any?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    AndroidView(
+        factory = { viewContext ->
+            factory(viewContext).also { view -> bindOwner(view, owner) }
+        },
+        update = { view ->
+            if (currentOwner(view) !== owner) bindOwner(view, owner)
+            if (viewState.value !== view) viewState.value = view
+        },
+        onRelease = { view ->
+            detachOwnedRemotePlaybackView(
+                view = view,
+                owner = owner,
+                currentOwner = currentOwner,
+                detach = { releasedView -> bindOwner(releasedView, null) }
+            )
+            if (viewState.value === view) viewState.value = null
+        },
+        modifier = modifier
+    )
 }
 
 /**
@@ -462,13 +495,31 @@ internal fun shouldDetachRemotePlaybackPlayerView(
  * cannot detach a view that has already been rebound to a newer player.
  */
 internal fun detachRemotePlaybackPlayerView(view: PlayerView?, owningPlayer: Player?) {
+    detachOwnedRemotePlaybackView(
+        view = view,
+        owner = owningPlayer,
+        currentOwner = { it.player },
+        detach = { it.player = null }
+    )
+}
+
+/**
+ * Applies the playback-session identity check to a concrete AndroidView instance.
+ * A stale session cannot detach a view that has since been rebound to another owner.
+ */
+internal fun <V> detachOwnedRemotePlaybackView(
+    view: V?,
+    owner: Any?,
+    currentOwner: (V) -> Any?,
+    detach: (V) -> Unit
+) {
     if (view == null) return
 
     detachRemotePlaybackPlayerViewIfOwned(
-        currentPlayer = view.player,
-        owningPlayer = owningPlayer
+        currentPlayer = currentOwner(view),
+        owningPlayer = owner
     ) {
-        view.player = null
+        detach(view)
     }
 }
 

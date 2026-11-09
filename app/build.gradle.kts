@@ -106,6 +106,7 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

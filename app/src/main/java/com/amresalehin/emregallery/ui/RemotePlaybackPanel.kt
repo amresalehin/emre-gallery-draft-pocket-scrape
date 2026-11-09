@@ -1,6 +1,7 @@
 package com.amresalehin.emregallery.ui
 
 import android.content.Context
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -283,6 +284,42 @@ internal fun RemotePlaybackDialog(
         var lifecycleObserver: LifecycleEventObserver? = null
         playbackFailed = false
 
+        fun cleanupSession() {
+            val disposingPlayer = activePlayer
+            val listener = playerListener
+            val observer = lifecycleObserver
+            activePlayer = null
+            playerListener = null
+            lifecycleObserver = null
+
+            val failures = runRemotePlaybackCleanup(
+                { sessionGuard.close() },
+                { observer?.let { lifecycleOwner.lifecycle.removeObserver(it) } },
+                {
+                    if (disposingPlayer != null && listener != null) {
+                        disposingPlayer.removeListener(listener)
+                    }
+                },
+                {
+                    if (disposingPlayer != null) {
+                        detachRemotePlaybackPlayerView(playerViewState.value, disposingPlayer)
+                    }
+                },
+                {
+                    if (disposingPlayer != null && playerState.value === disposingPlayer) {
+                        playerState.value = null
+                    }
+                },
+                { disposingPlayer?.let(releasePlayer) }
+            )
+            if (failures.isNotEmpty()) {
+                Log.w(
+                    "RemotePlaybackPanel",
+                    "Session cleanup had ${failures.size} failed operation(s)"
+                )
+            }
+        }
+
         try {
             val created = playerFactory(context.applicationContext)
             activePlayer = created
@@ -322,31 +359,13 @@ internal fun RemotePlaybackDialog(
             }
             playerState.value = created
         } catch (_: Exception) {
-            sessionGuard.close()
-            lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
-            activePlayer?.let { failedPlayer ->
-                playerListener?.let { failedPlayer.removeListener(it) }
-                detachRemotePlaybackPlayerView(playerViewState.value, failedPlayer)
-                releasePlayer(failedPlayer)
-            }
-            activePlayer = null
-            playerListener = null
-            lifecycleObserver = null
+            cleanupSession()
             playerState.value = null
             playbackFailed = true
         }
 
         onDispose {
-            sessionGuard.close()
-            lifecycleObserver?.let { lifecycleOwner.lifecycle.removeObserver(it) }
-            activePlayer?.let { releasingPlayer ->
-                playerListener?.let { releasingPlayer.removeListener(it) }
-                detachRemotePlaybackPlayerView(playerViewState.value, releasingPlayer)
-                if (playerState.value === releasingPlayer) {
-                    playerState.value = null
-                }
-                releasePlayer(releasingPlayer)
-            }
+            cleanupSession()
         }
     }
 

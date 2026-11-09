@@ -65,6 +65,25 @@ internal class RemotePlaybackSessionGuard {
     }
 }
 
+
+/**
+ * Runs every playback-session cleanup step even if an earlier operation fails.
+ *
+ * Cleanup is best-effort but ordered: callers put callback invalidation first and player release
+ * last. Returning failures lets the UI report a safe aggregate without exposing resource URLs.
+ */
+internal fun runRemotePlaybackCleanup(vararg cleanupSteps: () -> Unit): List<Exception> {
+    val failures = mutableListOf<Exception>()
+    cleanupSteps.forEach { step ->
+        try {
+            step()
+        } catch (failure: Exception) {
+            failures += failure
+        }
+    }
+    return failures
+}
+
 /**
  * Bridges Android lifecycle events to the playback intent controller.
  *

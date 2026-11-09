@@ -264,6 +264,85 @@ class RemotePlaybackLifecycleControllerTest {
         assertEquals("callbacks after close must be ignored", 1, callbackCount.get())
     }
 
+    @Test
+    fun cleanupAttemptsEveryStepInOrderWhenEarlierOperationsThrow() {
+        val calls = mutableListOf<String>()
+
+        val failures = runRemotePlaybackCleanup(
+            {
+                calls += "close-session"
+                throw IllegalStateException("close")
+            },
+            {
+                calls += "remove-observer"
+                throw IllegalArgumentException("observer")
+            },
+            {
+                calls += "remove-listener"
+                throw UnsupportedOperationException("listener")
+            },
+            {
+                calls += "detach-view"
+                throw IllegalStateException("detach")
+            },
+            {
+                calls += "clear-player-state"
+                throw IllegalStateException("state")
+            },
+            {
+                calls += "release-player"
+                throw IllegalStateException("release")
+            }
+        )
+
+        assertEquals(
+            listOf(
+                "close-session",
+                "remove-observer",
+                "remove-listener",
+                "detach-view",
+                "clear-player-state",
+                "release-player"
+            ),
+            calls
+        )
+        assertEquals(6, failures.size)
+        assertTrue(failures[0] is IllegalStateException)
+        assertTrue(failures[1] is IllegalArgumentException)
+        assertTrue(failures[2] is UnsupportedOperationException)
+    }
+
+    @Test
+    fun cleanupContinuesToReleasePlayerWhenViewDetachmentFails() {
+        val calls = mutableListOf<String>()
+
+        val failures = runRemotePlaybackCleanup(
+            { calls += "close-session" },
+            { calls += "remove-observer" },
+            { calls += "remove-listener" },
+            {
+                calls += "detach-view"
+                throw IllegalStateException("view is already detached")
+            },
+            { calls += "clear-player-state" },
+            { calls += "release-player" }
+        )
+
+        assertEquals(
+            listOf(
+                "close-session",
+                "remove-observer",
+                "remove-listener",
+                "detach-view",
+                "clear-player-state",
+                "release-player"
+            ),
+            calls
+        )
+        assertEquals(1, failures.size)
+        assertTrue(failures.single() is IllegalStateException)
+    }
+
     private fun awaitThreadState(
         thread: Thread,
         expectedState: Thread.State

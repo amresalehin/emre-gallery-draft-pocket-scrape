@@ -1,6 +1,7 @@
 package com.amresalehin.emregallery.ui
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier

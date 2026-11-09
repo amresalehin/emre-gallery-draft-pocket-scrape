@@ -6,6 +6,9 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -201,6 +204,77 @@ class RemotePlaybackLifecycleControllerTest {
         owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
 
         assertEquals(emptyList<String>(), actions)
+    }
+
+    @Test
+    fun closeWaitsForInFlightCallbackAndRejectsCallbacksAfterDisposal() {
+        val guard = RemotePlaybackSessionGuard()
+        val callbackEntered = CountDownLatch(1)
+        val finishCallback = CountDownLatch(1)
+        val closeAttempted = CountDownLatch(1)
+        val closeFinished = CountDownLatch(1)
+        val callbackCount = AtomicInteger()
+
+        val callbackThread = Thread {
+            guard.runIfActive {
+                callbackEntered.countDown()
+                check(finishCallback.await(5, TimeUnit.SECONDS))
+                callbackCount.incrementAndGet()
+            }
+        }
+        val closeThread = Thread {
+            closeAttempted.countDown()
+            guard.close()
+            closeFinished.countDown()
+        }
+
+        try {
+            callbackThread.start()
+            assertTrue(
+                "callback did not enter",
+                callbackEntered.await(2, TimeUnit.SECONDS)
+            )
+            closeThread.start()
+            assertTrue(
+                "close thread did not start",
+                closeAttempted.await(2, TimeUnit.SECONDS)
+            )
+            assertTrue(
+                "close should block behind an active callback",
+                awaitThreadState(closeThread, Thread.State.BLOCKED)
+            )
+            assertEquals(
+                "close must not finish while the callback is active",
+                1L,
+                closeFinished.count
+            )
+        } finally {
+            finishCallback.countDown()
+            callbackThread.join(2_000)
+            closeThread.join(2_000)
+        }
+
+        assertFalse("callback thread should terminate", callbackThread.isAlive)
+        assertFalse("close thread should terminate", closeThread.isAlive)
+        assertEquals("close should finish after the callback exits", 0L, closeFinished.count)
+        assertEquals(1, callbackCount.get())
+
+        guard.runIfActive { callbackCount.incrementAndGet() }
+
+        assertEquals("callbacks after close must be ignored", 1, callbackCount.get())
+    }
+
+    private fun awaitThreadState(
+        thread: Thread,
+        expectedState: Thread.State
+    ): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (System.nanoTime() < deadline) {
+            if (thread.state == expectedState) return true
+            if (!thread.isAlive) return false
+            Thread.yield()
+        }
+        return thread.state == expectedState
     }
 
     private fun controller(actions: MutableList<String>) =

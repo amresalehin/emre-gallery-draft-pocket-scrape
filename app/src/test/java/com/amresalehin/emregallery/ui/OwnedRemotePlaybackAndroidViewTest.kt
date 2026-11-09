@@ -2,13 +2,14 @@ package com.amresalehin.emregallery.ui
 
 import android.content.Context
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -23,7 +24,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class OwnedRemotePlaybackAndroidViewTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun removingAndroidViewDetachesOnceAndLaterParentDisposalIsANoOp() {

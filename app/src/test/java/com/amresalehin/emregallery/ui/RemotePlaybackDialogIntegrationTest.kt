@@ -138,6 +138,79 @@ class RemotePlaybackDialogIntegrationTest {
     }
 
     @Test
+    fun prepareFailureRemovesObserverAndDoesNotRetryReleaseWhenReleaseThrows() {
+        val playback = playablePlayback()
+        val lifecycleOwner = TrackingLifecycleOwner()
+        val showDialog = mutableStateOf(true)
+        val players = mutableListOf<ExoPlayer>()
+        var releaseAttempts = 0
+        var observerRemovedBeforeRelease = false
+        var playerViewFactoryCalls = 0
+        lateinit var playerListener: Player.Listener
+
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+                MaterialTheme {
+                    if (showDialog.value) {
+                        RemotePlaybackDialog(
+                            playback = playback,
+                            onDismiss = { showDialog.value = false },
+                            onOpenSourcePage = null,
+                            playerFactory = { context ->
+                                ExoPlayer.Builder(context).build().also(players::add)
+                            },
+                            preparePlayer = {
+                                throw IllegalStateException("Simulated preparation failure")
+                            },
+                            releasePlayer = { player ->
+                                releaseAttempts += 1
+                                observerRemovedBeforeRelease =
+                                    lifecycleOwner.trackingLifecycle.observers.isEmpty()
+                                player.release()
+                                throw IllegalStateException("Simulated post-release callback failure")
+                            },
+                            playerViewFactory = { context ->
+                                playerViewFactoryCalls += 1
+                                PlayerView(context)
+                            },
+                            onPlayerListenerCreated = { playerListener = it }
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        assertEquals(1, players.size)
+        assertEquals(1, releaseAttempts)
+        assertTrue(observerRemovedBeforeRelease)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.addCount)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+        assertEquals(0, playerViewFactoryCalls)
+
+        // The failed session's listener must remain inert after cleanup and player release.
+        composeRule.runOnIdle {
+            playerListener.onPlayerError(
+                PlaybackException(
+                    "Late error from failed initialization",
+                    null,
+                    PlaybackException.ERROR_CODE_UNSPECIFIED
+                )
+            )
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        // onDispose runs after the failed initialization path; it must not release the player again.
+        assertEquals(1, releaseAttempts)
+        assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+    }
+
+    @Test
     fun prepareFailureKeepsBrowserFallbackAvailableAndReleasesPlayerOnce() {
         val playback = playablePlayback()
         val showDialog = mutableStateOf(true)

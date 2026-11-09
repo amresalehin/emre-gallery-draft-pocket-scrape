@@ -3,6 +3,7 @@ package com.amresalehin.emregallery.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -10,6 +11,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -335,6 +342,110 @@ class RemotePlaybackDialogIntegrationTest {
         assertEquals(true, detachedBeforeRelease[1])
     }
 
+    @Test
+    fun dialogDisposalRemovesLifecycleObserverAndRepeatedSessionsDoNotAccumulateObservers() {
+        val playback = playablePlayback()
+        val lifecycleOwner = TrackingLifecycleOwner()
+        val showDialog = mutableStateOf(true)
+        val players = mutableListOf<ExoPlayer>()
+        val views = mutableListOf<PlayerView>()
+        val releaseCounts = mutableMapOf<Int, Int>()
+        val detachedBeforeRelease = mutableMapOf<Int, Boolean>()
+
+        composeRule.setContent {
+            CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+                MaterialTheme {
+                    if (showDialog.value) {
+                        RemotePlaybackDialog(
+                            playback = playback,
+                            onDismiss = { showDialog.value = false },
+                            onOpenSourcePage = null,
+                            playerFactory = { context ->
+                                ExoPlayer.Builder(context).build().also(players::add)
+                            },
+                            preparePlayer = {},
+                            releasePlayer = { player ->
+                                val sessionIndex = players.indexOfFirst { it === player }
+                                releaseCounts[sessionIndex] =
+                                    (releaseCounts[sessionIndex] ?: 0) + 1
+                                detachedBeforeRelease[sessionIndex] =
+                                    views.getOrNull(sessionIndex)?.player == null
+                                player.release()
+                            },
+                            playerViewFactory = { context ->
+                                PlayerView(context).also(views::add)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        val firstPlayer = requireNotNull(players.getOrNull(0))
+        val firstView = requireNotNull(views.getOrNull(0))
+        val firstObserver = requireNotNull(
+            lifecycleOwner.trackingLifecycle.observers.singleOrNull()
+        ) as LifecycleEventObserver
+        composeRule.runOnIdle {
+            assertSame(firstPlayer, firstView.player)
+            assertEquals(1, lifecycleOwner.trackingLifecycle.addCount)
+            assertEquals(0, lifecycleOwner.trackingLifecycle.removeCount)
+        }
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        assertNull(firstView.player)
+        assertEquals(1, releaseCounts[0])
+        assertEquals(true, detachedBeforeRelease[0])
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+        assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+
+        composeRule.runOnIdle { showDialog.value = true }
+        composeRule.waitForIdle()
+
+        val secondPlayer = requireNotNull(players.getOrNull(1))
+        val secondView = requireNotNull(views.getOrNull(1))
+        val secondObserver = requireNotNull(
+            lifecycleOwner.trackingLifecycle.observers.singleOrNull()
+        ) as LifecycleEventObserver
+        assertFalse(firstPlayer === secondPlayer)
+        assertFalse(firstObserver === secondObserver)
+        composeRule.runOnIdle {
+            assertSame(secondPlayer, secondView.player)
+            assertEquals(2, lifecycleOwner.trackingLifecycle.addCount)
+            assertEquals(1, lifecycleOwner.trackingLifecycle.removeCount)
+        }
+
+        // A callback already queued by the disposed observer must not pause the replacement player.
+        composeRule.runOnIdle {
+            firstObserver.onStateChanged(lifecycleOwner, Lifecycle.Event.ON_PAUSE)
+            firstObserver.onStateChanged(lifecycleOwner, Lifecycle.Event.ON_RESUME)
+            assertTrue(secondPlayer.playWhenReady)
+        }
+
+        // The currently registered observer still handles real lifecycle transitions.
+        composeRule.runOnIdle {
+            lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+            assertFalse(secondPlayer.playWhenReady)
+            lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+            assertTrue(secondPlayer.playWhenReady)
+        }
+
+        composeRule.onNodeWithContentDescription("Close player").performClick()
+        composeRule.waitForIdle()
+
+        assertNull(secondView.player)
+        assertEquals(1, releaseCounts[0])
+        assertEquals(1, releaseCounts[1])
+        assertEquals(true, detachedBeforeRelease[0])
+        assertEquals(true, detachedBeforeRelease[1])
+        assertTrue(lifecycleOwner.trackingLifecycle.observers.isEmpty())
+        assertEquals(2, lifecycleOwner.trackingLifecycle.addCount)
+        assertEquals(2, lifecycleOwner.trackingLifecycle.removeCount)
+    }
+
     private fun playablePlayback(): ResolvedMediaAssetPlayback {
         val resourceUrl = "https://media.example.com/video.mp4?token=test"
         val sourcePageUrl = "https://example.com/watch/123"
@@ -373,4 +484,47 @@ class RemotePlaybackDialogIntegrationTest {
             )
         )
     }
+    private class TrackingLifecycleOwner : LifecycleOwner {
+        private val registry = LifecycleRegistry(this)
+        val trackingLifecycle = TrackingLifecycle(registry)
+
+        override val lifecycle: Lifecycle
+            get() = trackingLifecycle
+
+        init {
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+            registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        }
+
+        fun handleLifecycleEvent(event: Lifecycle.Event) {
+            registry.handleLifecycleEvent(event)
+        }
+    }
+
+    private class TrackingLifecycle(
+        private val registry: LifecycleRegistry
+    ) : Lifecycle() {
+        val observers = linkedSetOf<LifecycleObserver>()
+        var addCount = 0
+            private set
+        var removeCount = 0
+            private set
+
+        override fun addObserver(observer: LifecycleObserver) {
+            addCount += 1
+            observers += observer
+            registry.addObserver(observer)
+        }
+
+        override fun removeObserver(observer: LifecycleObserver) {
+            removeCount += 1
+            observers -= observer
+            registry.removeObserver(observer)
+        }
+
+        override val currentState: Lifecycle.State
+            get() = registry.currentState
+    }
+
 }
